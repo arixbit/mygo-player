@@ -21,9 +21,10 @@ func TestRunUpdatesManifestAndCopiesAssets(t *testing.T) {
 
 	manifestPath := filepath.Join(tmp, "mygo-plugin.json")
 	outDir := filepath.Join(tmp, "release")
+	source := "https://github.com/mpv-player/mpv/releases/tag/v0.40.0"
 	release := "https://github.com/arixbit/mygo-player/releases/download/libmpv-v0.40.0"
 
-	err := run(manifestPath, "mpv", release, outDir, map[string]string{
+	err := run(manifestPath, "mpv", source, release, outDir, map[string]string{
 		"darwin-arm64": armSrc,
 		"darwin-amd64": amdSrc,
 	})
@@ -39,7 +40,7 @@ func TestRunUpdatesManifestAndCopiesAssets(t *testing.T) {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		t.Fatal(err)
 	}
-	if len(m.Libraries) != 1 || m.Libraries[0].Name != "mpv" {
+	if len(m.Libraries) != 1 || m.Libraries[0].Name != "mpv" || m.Libraries[0].Source != source {
 		t.Fatalf("unexpected manifest: %+v", m)
 	}
 	for _, target := range []string{"darwin-arm64", "darwin-amd64"} {

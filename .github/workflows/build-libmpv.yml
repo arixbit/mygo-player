@@ -30,7 +30,7 @@ jobs:
         include:
           - goarch: arm64
             arch: arm64
-            runner: macos-14
+            runner: macos-15
           - goarch: amd64
             arch: x86_64
             runner: macos-15-intel
@@ -99,9 +99,12 @@ jobs:
           echo "url=https://github.com/${{ github.repository }}/releases/download/${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Prepare SHA-256 assets and update mygo-plugin.json
+        env:
+          MPV_VERSION: ${{ github.event.inputs.mpv_version || '0.40.0' }}
         run: |
           go run ./scripts/update-manifest \
             -manifest mygo-plugin.json \
+            -source "https://github.com/mpv-player/mpv/releases/tag/v${MPV_VERSION}" \
             -release "${{ steps.meta.outputs.url }}" \
             -out dist/release \
             -file "darwin-arm64=artifacts/libmpv-darwin-arm64.dylib" \

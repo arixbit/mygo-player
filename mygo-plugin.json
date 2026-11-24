@@ -2,6 +2,7 @@
   "libraries": [
     {
       "name": "mpv",
+      "source": "https://github.com/mpv-player/mpv/releases/tag/v0.40.0",
       "release": "https://github.com/arixbit/mygo-player/releases/download/native-mpv"
     }
   ]

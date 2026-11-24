@@ -74,41 +74,41 @@ func main() {
 	}
 
 	mode := player.HWDecMode(*hwdec)
-	p, err := player.New(player.Options{
-		HWDec:       mode,
-		HTTPHeaders: headers,
-		UserAgent:   *ua,
-		Referrer:    *ref,
-		LogLevel:    *logLevel,
-		OnLog: func(level, prefix, text string) {
-			log.Printf("[mpv:%s:%s] %s", level, prefix, text)
-		},
-	})
-	if err != nil {
-		log.Fatalf("failed to create player: %v", err)
-	}
-	defer p.Close()
-
-	app := &demoApp{
-		p:             p,
-		hwdecMode:     mode,
-		initialTarget: target,
-		initialOpts: player.OpenOptions{
-			Headers:   headers,
-			UserAgent: *ua,
-			Referrer:  *ref,
-			Subtitles: subs,
-		},
+	initialOpts := player.OpenOptions{
+		Headers:   headers,
+		UserAgent: *ua,
+		Referrer:  *ref,
+		Subtitles: subs,
 	}
 
 	mygo.App.WhenReady(func() {
+		p, err := player.New(player.Options{
+			HWDec:       mode,
+			HTTPHeaders: headers,
+			UserAgent:   *ua,
+			Referrer:    *ref,
+			LogLevel:    *logLevel,
+			OnLog: func(level, prefix, text string) {
+				log.Printf("[mpv:%s:%s] %s", level, prefix, text)
+			},
+		})
+		if err != nil {
+			log.Fatalf("failed to create player: %v", err)
+		}
+
+		app := &demoApp{
+			p:             p,
+			hwdecMode:     mode,
+			initialTarget: target,
+			initialOpts:   initialOpts,
+		}
 		app.win = mygo.NewWindow(mygo.WindowOptions{
 			Title:   "MyGo Player (libmpv Zero-Copy)",
 			Width:   1120,
 			Height:  680,
 			Content: ui.View(app.view),
 		})
-		app.win.OnClose(func(*mygo.CloseEvent) {
+		app.win.OnClosed(func() {
 			_ = app.p.Close()
 		})
 		if app.initialTarget != "" {

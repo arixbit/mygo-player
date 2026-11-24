@@ -31,19 +31,17 @@ import (
 )
 
 func main() {
-	p, err := player.New(player.Options{
-		HWDec: player.HWDecAutoSafe, // VideoToolbox on macOS
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer p.Close()
-
-	_ = p.Open("/path/to/movie.mkv", player.OpenOptions{
-		Subtitles: []string{"/path/to/movie.srt"},
-	})
-
 	mygo.App.WhenReady(func() {
+		p, err := player.New(player.Options{
+			HWDec: player.HWDecAutoSafe, // VideoToolbox on macOS
+		})
+		if err != nil {
+			log.Fatal(err)
+		}
+		_ = p.Open("/path/to/movie.mkv", player.OpenOptions{
+			Subtitles: []string{"/path/to/movie.srt"},
+		})
+
 		win := mygo.NewWindow(mygo.WindowOptions{
 			Title:  "Player",
 			Width:  1024,
@@ -52,7 +50,7 @@ func main() {
 				player.View(c, p).Fill()
 			}),
 		})
-		win.OnClose(func(*mygo.CloseEvent) { _ = p.Close() })
+		win.OnClosed(func() { _ = p.Close() })
 	})
 
 	if err := mygo.App.Run(); err != nil {

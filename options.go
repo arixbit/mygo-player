@@ -120,10 +120,13 @@ type Options struct {
 	// ExtraOptions sets arbitrary libmpv options before mpv_initialize.
 	ExtraOptions map[string]string
 	// OnLog receives libmpv log lines when LogLevel is set.
+	// Runs on the player's background event goroutine.
 	OnLog func(level, prefix, text string)
 	// OnStateChange is invoked when playback state, tracks, or metadata change.
+	// Runs on the player's background event goroutine; calls to Player methods are safe.
 	OnStateChange func()
 	// OnEndFile is invoked when playback of a file ends (EOF, stop, or error).
+	// Runs on the player's background event goroutine.
 	OnEndFile func(err error)
 }
 

@@ -24,6 +24,7 @@ type manifest struct {
 
 type library struct {
 	Name    string          `json:"name"`
+	Source  string          `json:"source,omitempty"`
 	Release string          `json:"release,omitempty"`
 	Files   map[string]file `json:"files,omitempty"`
 }
@@ -50,6 +51,7 @@ func (f fileFlag) Set(v string) error {
 func main() {
 	manifestPath := flag.String("manifest", "mygo-plugin.json", "path to mygo-plugin.json")
 	releaseURL := flag.String("release", "", "base GitHub release download URL (https://github.com/<owner>/<repo>/releases/download/<tag>)")
+	sourceURL := flag.String("source", "", "upstream source URL recorded for license provenance")
 	outDir := flag.String("out", "dist/release", "output directory for SHA-256 named release assets")
 	libName := flag.String("name", "mpv", "library name in mygo-plugin.json")
 	inputs := make(fileFlag)
@@ -60,13 +62,13 @@ func main() {
 		fmt.Fprintln(os.Stderr, "update-manifest: at least one -file <goos>-<goarch>=<path> is required")
 		os.Exit(2)
 	}
-	if err := run(*manifestPath, *libName, *releaseURL, *outDir, inputs); err != nil {
+	if err := run(*manifestPath, *libName, *sourceURL, *releaseURL, *outDir, inputs); err != nil {
 		fmt.Fprintf(os.Stderr, "update-manifest: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(manifestPath, libName, releaseURL, outDir string, inputs map[string]string) error {
+func run(manifestPath, libName, sourceURL, releaseURL, outDir string, inputs map[string]string) error {
 	var m manifest
 	if raw, err := os.ReadFile(manifestPath); err == nil {
 		if err := json.Unmarshal(raw, &m); err != nil {
@@ -89,6 +91,9 @@ func run(manifestPath, libName, releaseURL, outDir string, inputs map[string]str
 	}
 
 	lib := &m.Libraries[idx]
+	if sourceURL != "" {
+		lib.Source = sourceURL
+	}
 	if releaseURL != "" {
 		lib.Release = strings.TrimSuffix(releaseURL, "/")
 	}
