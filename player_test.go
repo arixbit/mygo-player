@@ -430,11 +430,24 @@ func TestIntegrationLifecycleOpenClose(t *testing.T) {
 		tt := ui.NewTester(func(c *ui.Context) {
 			View(c, p).Fill()
 		}, 160, 120)
-		waitFor(t, 5*time.Second, fmt.Sprintf("cycle %d top RED pixel", i), func() bool {
+		var lastTop [4]uint8
+		deadline := time.Now().Add(5 * time.Second)
+		matched := false
+		for time.Now().Before(deadline) {
 			tt.Frame()
 			topC := tt.Image().RGBAAt(80, 30)
-			return topC.R >= 180 && topC.G <= 60 && topC.B <= 60
-		})
+			lastTop = [4]uint8{topC.R, topC.G, topC.B, topC.A}
+			if topC.R >= 180 && topC.G <= 60 && topC.B <= 60 {
+				matched = true
+				break
+			}
+			time.Sleep(30 * time.Millisecond)
+		}
+		if !matched {
+			w, h := p.FrameSize()
+			t.Fatalf("cycle %d: timed out waiting for top RED pixel (lastTop=%v frames=%d size=%dx%d state=%s)",
+				i, lastTop, p.FramesRendered(), w, h, p.Snapshot().State)
+		}
 
 		if err := p.Close(); err != nil {
 			t.Fatalf("cycle %d: Close: %v", i, err)

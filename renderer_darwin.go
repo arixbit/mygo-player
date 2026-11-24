@@ -398,6 +398,7 @@ func (r *darwinRenderer) run(ready chan<- error) {
 	var poolW, poolH int
 	var rrIdx int
 	hasFrame := false
+	pendingFrame := false
 
 	destroyPool := func() {
 		for _, s := range pool {
@@ -457,20 +458,14 @@ func (r *darwinRenderer) run(ready chan<- error) {
 		flags := rctx.Update()
 		forced := r.forceRedraw.Swap(false)
 		needRender := (flags & mpv.RenderUpdateFrame) != 0
-		if !needRender && !(forced && hasFrame) {
+		if needRender {
+			pendingFrame = true
+		}
+		if !pendingFrame && !(forced && hasFrame) {
 			continue
 		}
 
 		w, h := r.targetSize()
-		if w <= 0 || h <= 0 {
-			// Try querying current output dimensions directly if video-params hasn't fired yet.
-			if dw, err1 := r.client.GetPropertyInt64("dwidth"); err1 == nil && dw > 0 {
-				if dh, err2 := r.client.GetPropertyInt64("dheight"); err2 == nil && dh > 0 {
-					w, h = clampRenderDim(int(dw)), clampRenderDim(int(dh))
-					r.SetVideoSize(w, h)
-				}
-			}
-		}
 		if w <= 0 || h <= 0 {
 			continue
 		}
@@ -508,13 +503,15 @@ func (r *darwinRenderer) run(ready chan<- error) {
 			continue
 		}
 
-		// Flush OpenGL command stream so the IOSurface is synchronized before Metal samples it.
-		darwinGL.glFlush()
+		// Finish OpenGL rendering so the IOSurface backing memory is fully
+		// synchronized before Metal or CPU (IOSurfaceLock) reads it.
+		darwinGL.glFinish()
 
 		// Present takes ownership of one CF reference to the IOSurfaceRef.
 		darwinGL.cfRetain(slot.surface)
 		r.tex.Present(slot.surface)
 		rctx.ReportSwap()
+		pendingFrame = false
 		hasFrame = true
 		r.framesDrawn.Add(1)
 	}
