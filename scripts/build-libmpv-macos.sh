@@ -179,10 +179,34 @@ fetch_tar "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VER}.tar.xz" "$SRC_DIR/ff
 )
 
 # 10. mpv / libmpv (strictly LGPL-2.1+: -Dgpl=false)
+# Note: Do not pass --prefer-static to mpv's meson setup because macOS SDK only
+# ships libiconv.tbd / libz.tbd (no static .a). All third-party dependencies in
+# $PREFIX/lib were built static-only; wrap pkg-config with --static so mpv pulls
+# every Libs.private entry (Apple frameworks, dav1d, harfbuzz, freetype, etc.)
+# while still resolving macOS system iconv/zlib cleanly.
+mkdir -p "$WORK_DIR/bin"
+cat > "$WORK_DIR/bin/pkg-config-static" <<'EOF'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  case "$arg" in
+    --libs|--libs-only-l|--libs-only-L|--libs-only-other)
+      exec pkg-config --static "$@"
+      ;;
+  esac
+done
+exec pkg-config "$@"
+EOF
+chmod +x "$WORK_DIR/bin/pkg-config-static"
+
+cat > "$BUILD_DIR/mpv-native.ini" <<EOF
+[binaries]
+pkg-config = '$WORK_DIR/bin/pkg-config-static'
+EOF
+
 fetch_tar "https://github.com/mpv-player/mpv/archive/refs/tags/v${MPV_VER}.tar.gz" "$SRC_DIR/mpv"
 meson setup "$BUILD_DIR/mpv" "$SRC_DIR/mpv" \
+  --native-file "$BUILD_DIR/mpv-native.ini" \
   --prefix="$PREFIX" --libdir=lib --buildtype=release \
-  --prefer-static \
   -Dgpl=false \
   -Dlibmpv=true \
   -Dcplayer=false \
@@ -219,7 +243,7 @@ meson setup "$BUILD_DIR/mpv" "$SRC_DIR/mpv" \
   -Dhtml-build=disabled \
   -Dmanpage-build=disabled \
   -Dpdf-build=disabled \
-  -Dc_link_args="-Wl,-dead_strip"
+  -Dc_link_args="['-Wl,-dead_strip','-lc++']"
 ninja -C "$BUILD_DIR/mpv" -j"$JOBS" install
 
 BUILT_DYLIB="$(find "$PREFIX/lib" -maxdepth 1 -name 'libmpv*.dylib' -type f | head -n 1)"
