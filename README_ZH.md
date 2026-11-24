@@ -135,6 +135,29 @@ _ = p.SetHWDec(player.HWDecAutoCopy)
 log.Println("当前硬解后端:", p.CurrentHWDec())
 ```
 
+## 音画与字幕微调
+
+所有微调方法在 `Close` 后返回 `ErrClosed`，越界值直接报错，影响画面时会立即重绘当前帧，并同步到 `Snapshot()`（通过 `SetPropertyString` 修改同样会被观测同步）：
+
+| 方法 | 取值范围 | Snapshot 字段 |
+| --- | --- | --- |
+| `SetSubtitleDelay(d time.Duration)` / `SetAudioDelay(d time.Duration)` | 任意（正值 = 延后） | `SubDelay` / `AudioDelay` |
+| `SetSubtitleScale(f float64)` | `(0, 100]`，默认 `1.0` | `SubScale` |
+| `SetSubtitlePos(p int)` | `0..150`（占画面高度百分比），默认 `100` | `SubPos` |
+| `SetVideoRotate(deg int)` | `0`、`90`、`180`、`270` | `VideoRotate` |
+| `SetPanscan(f float64)` | `0..1`（`1` = 裁切铺满 View） | `Panscan` |
+| `FrameStep()` / `FrameBackStep()` | 暂停并前进 / 后退一帧 | `Position` |
+
+```go
+_ = p.SetSubtitleDelay(250 * time.Millisecond)
+_ = p.SetSubtitleScale(1.2)
+_ = p.SetPanscan(1.0) // View 与视频宽高比不同时铺满画面（无黑边）
+```
+
+> `View` 始终按元素完整尺寸渲染（由 libmpv 在内部加黑边，字幕保持清晰），因此 `Fit(ui.Cover)` 去不掉黑边——请使用 `SetPanscan`。
+
+播放行为说明：播完后 `TogglePause`/`Play` 会从头重播；默认 `KeepOpen` 下首次到达结尾会触发一次 `OnEndFile(nil)`；可以在 `OnStateChange`/`OnEndFile` 回调内直接调用 `Close`；仅位置变化引起的 `OnStateChange` 通知限频约 100 ms，`Snapshot().Position` 精度不变。
+
 ## 无头 UI 测试（`ui.NewTester`）
 
 因为 `player.View` 直接渲染在 MyGo 的原生 UI 图层中，你可以直接使用 MyGo 的无头测试工具 `ui.NewTester` 来验证播放界面布局、叠层控制栏、空状态/空闲状态以及高分屏视口尺寸——无需弹出真实窗口，甚至不需要本机安装 `libmpv`：

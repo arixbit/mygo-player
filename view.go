@@ -13,10 +13,19 @@ import (
 // popovers always render cleanly on top.
 //
 // The returned ui.Element can be styled and laid out like any ui.Image
-// (Fill, Width, Height, Fit, Radius, Opacity, etc.). View automatically binds
+// (Fill, Width, Height, Radius, Opacity, etc.). View automatically binds
 // the window's Invalidate hook to the player and reads the window's live
 // display scale via ui.Painter.Scale() so both video and libass subtitles stay
 // sharp across HiDPI/Retina and multi-monitor setups.
+//
+// Aspect ratio and filling: View asks libmpv to render at the element's full
+// physical size, and libmpv itself letterboxes the picture inside that frame
+// (black bars) while drawing subtitles at full viewport resolution. The
+// element's Fit(ui.Contain) therefore only matters before the first sized
+// frame; overriding it with Fit(ui.Cover) does NOT remove libmpv's black bars
+// (the frame already matches the element's size, bars included). To fill the viewport (crop-to-fill), keep the
+// View full-size and call p.SetPanscan(1.0) (any value in 0..1 trades bars
+// for cropping); SetVideoRotate rotates within the same frame.
 func View(c *ui.Context, p *Player) ui.Element {
 	if p == nil {
 		return ui.Box(c).Background(ui.RGB(0, 0, 0))

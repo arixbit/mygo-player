@@ -10,9 +10,16 @@ import (
 	"github.com/egoist/mygo/ffi"
 )
 
-// Client wraps an mpv_handle.
+// ErrNilClient is reported (wrapped in *Error with Code ErrUninitialized) when
+// a method is invoked on a nil Client or one whose handle was already released
+// by TerminateDestroy.
+var ErrNilClient = errors.New("mpv: nil or destroyed client")
+
+// Client wraps an mpv_handle. All methods are safe to call on a nil Client or
+// after TerminateDestroy: they return an error (or a zero value) instead of
+// passing a NULL/freed handle to libmpv.
 type Client struct {
-	handle uintptr
+	handle atomic.Uintptr
 }
 
 // Create allocates a new uninitialized mpv Client.
@@ -25,53 +32,93 @@ func Create() (*Client, error) {
 	if h == 0 {
 		return nil, errors.New("mpv: mpv_create returned NULL")
 	}
-	return &Client{handle: h}, nil
+	c := &Client{}
+	c.handle.Store(h)
+	return c, nil
 }
 
-// Handle returns the raw mpv_handle pointer.
+// Handle returns the raw mpv_handle pointer (0 for nil or destroyed clients).
 func (c *Client) Handle() uintptr {
 	if c == nil {
 		return 0
 	}
-	return c.handle
+	return c.handle.Load()
+}
+
+// ptr returns the live handle or a descriptive error for op.
+func (c *Client) ptr(op string) (uintptr, error) {
+	if c == nil {
+		return 0, &Error{Code: ErrUninitialized, Op: op, Msg: ErrNilClient.Error()}
+	}
+	h := c.handle.Load()
+	if h == 0 {
+		return 0, &Error{Code: ErrUninitialized, Op: op, Msg: ErrNilClient.Error()}
+	}
+	return h, nil
+}
+
+// Is reports ErrNilClient for nil/destroyed client errors so callers can use
+// errors.Is(err, mpv.ErrNilClient).
+func (e *Error) Is(target error) bool {
+	return target == ErrNilClient && e.Code == ErrUninitialized && e.Msg == ErrNilClient.Error()
 }
 
 // Initialize finishes initializing the mpv instance.
 func (c *Client) Initialize() error {
+	h, err := c.ptr("initialize")
+	if err != nil {
+		return err
+	}
 	ensureNumericLocale()
-	return checkErr("initialize", fns.Initialize(c.handle))
+	return checkErr("initialize", fns.Initialize(h))
 }
 
-// TerminateDestroy terminates and frees the mpv instance.
+// TerminateDestroy terminates and frees the mpv instance. It is idempotent.
 func (c *Client) TerminateDestroy() {
-	if c == nil || c.handle == 0 {
+	if c == nil {
 		return
 	}
-	h := c.handle
-	c.handle = 0
+	h := c.handle.Swap(0)
+	if h == 0 {
+		return
+	}
 	fns.TerminateDestroy(h)
 }
 
 // SetOptionString sets an mpv option as a string.
 func (c *Client) SetOptionString(name, value string) error {
-	return checkErr("set_option_string("+name+")", fns.SetOptionString(c.handle, name, value))
+	op := "set_option_string(" + name + ")"
+	h, err := c.ptr(op)
+	if err != nil {
+		return err
+	}
+	return checkErr(op, fns.SetOptionString(h, name, value))
 }
 
 // SetOptionFlag sets a boolean option on mpv.
 func (c *Client) SetOptionFlag(name string, value bool) error {
+	op := "set_option(" + name + ")"
+	h, err := c.ptr(op)
+	if err != nil {
+		return err
+	}
 	var v int32
 	if value {
 		v = 1
 	}
-	err := checkErr("set_option("+name+")", fns.SetOption(c.handle, name, int32(FormatFlag), unsafe.Pointer(&v)))
+	err = checkErr(op, fns.SetOption(h, name, int32(FormatFlag), unsafe.Pointer(&v)))
 	runtime.KeepAlive(&v)
 	return err
 }
 
 // Command executes an mpv command synchronously.
 func (c *Client) Command(args ...string) error {
+	h, err := c.ptr("command")
+	if err != nil {
+		return err
+	}
 	ptrs, keep := buildCStringArray(args)
-	err := checkErr("command", fns.Command(c.handle, &ptrs[0]))
+	err = checkErr("command", fns.Command(h, &ptrs[0]))
 	runtime.KeepAlive(keep)
 	runtime.KeepAlive(ptrs)
 	return err
@@ -79,8 +126,12 @@ func (c *Client) Command(args ...string) error {
 
 // CommandAsync executes an mpv command asynchronously.
 func (c *Client) CommandAsync(replyUserdata uint64, args ...string) error {
+	h, err := c.ptr("command_async")
+	if err != nil {
+		return err
+	}
 	ptrs, keep := buildCStringArray(args)
-	err := checkErr("command_async", fns.CommandAsync(c.handle, replyUserdata, &ptrs[0]))
+	err = checkErr("command_async", fns.CommandAsync(h, replyUserdata, &ptrs[0]))
 	runtime.KeepAlive(keep)
 	runtime.KeepAlive(ptrs)
 	return err
@@ -88,37 +139,61 @@ func (c *Client) CommandAsync(replyUserdata uint64, args ...string) error {
 
 // CommandString runs a raw mpv command string.
 func (c *Client) CommandString(cmd string) error {
-	return checkErr("command_string", fns.CommandString(c.handle, cmd))
+	h, err := c.ptr("command_string")
+	if err != nil {
+		return err
+	}
+	return checkErr("command_string", fns.CommandString(h, cmd))
 }
 
 // SetPropertyString sets a property as a string.
 func (c *Client) SetPropertyString(name, value string) error {
-	return checkErr("set_property_string("+name+")", fns.SetPropertyStr(c.handle, name, value))
+	op := "set_property_string(" + name + ")"
+	h, err := c.ptr(op)
+	if err != nil {
+		return err
+	}
+	return checkErr(op, fns.SetPropertyStr(h, name, value))
 }
 
 // SetPropertyFlag sets a boolean property.
 func (c *Client) SetPropertyFlag(name string, value bool) error {
+	op := "set_property(" + name + ")"
+	h, err := c.ptr(op)
+	if err != nil {
+		return err
+	}
 	var v int32
 	if value {
 		v = 1
 	}
-	err := checkErr("set_property("+name+")", fns.SetProperty(c.handle, name, int32(FormatFlag), unsafe.Pointer(&v)))
+	err = checkErr(op, fns.SetProperty(h, name, int32(FormatFlag), unsafe.Pointer(&v)))
 	runtime.KeepAlive(&v)
 	return err
 }
 
 // SetPropertyInt64 sets an int64 property.
 func (c *Client) SetPropertyInt64(name string, value int64) error {
+	op := "set_property(" + name + ")"
+	h, err := c.ptr(op)
+	if err != nil {
+		return err
+	}
 	v := value
-	err := checkErr("set_property("+name+")", fns.SetProperty(c.handle, name, int32(FormatInt64), unsafe.Pointer(&v)))
+	err = checkErr(op, fns.SetProperty(h, name, int32(FormatInt64), unsafe.Pointer(&v)))
 	runtime.KeepAlive(&v)
 	return err
 }
 
 // SetPropertyFloat64 sets a float64 property.
 func (c *Client) SetPropertyFloat64(name string, value float64) error {
+	op := "set_property(" + name + ")"
+	h, err := c.ptr(op)
+	if err != nil {
+		return err
+	}
 	v := value
-	err := checkErr("set_property("+name+")", fns.SetProperty(c.handle, name, int32(FormatDouble), unsafe.Pointer(&v)))
+	err = checkErr(op, fns.SetProperty(h, name, int32(FormatDouble), unsafe.Pointer(&v)))
 	runtime.KeepAlive(&v)
 	return err
 }
@@ -127,6 +202,11 @@ func (c *Client) SetPropertyFloat64(name string, value float64) error {
 // using an MPV_FORMAT_NODE array so values containing commas or quotes need no
 // string escaping.
 func (c *Client) SetPropertyStringList(name string, items []string) error {
+	op := "set_property(" + name + ")"
+	h, err := c.ptr(op)
+	if err != nil {
+		return err
+	}
 	bufs := make([][]byte, len(items))
 	nodes := make([]Node, len(items))
 	for i, s := range items {
@@ -150,7 +230,7 @@ func (c *Client) SetPropertyStringList(name string, items []string) error {
 		U:      uint64(uintptr(unsafe.Pointer(&list))),
 		Format: FormatNodeArray,
 	}
-	err := checkErr("set_property("+name+")", fns.SetProperty(c.handle, name, int32(FormatNode), unsafe.Pointer(&root)))
+	err = checkErr(op, fns.SetProperty(h, name, int32(FormatNode), unsafe.Pointer(&root)))
 	runtime.KeepAlive(bufs)
 	runtime.KeepAlive(nodes)
 	runtime.KeepAlive(&list)
@@ -160,9 +240,14 @@ func (c *Client) SetPropertyStringList(name string, items []string) error {
 
 // GetPropertyString reads a property as a string.
 func (c *Client) GetPropertyString(name string) (string, error) {
-	p := fns.GetPropertyStr(c.handle, name)
+	op := "get_property_string(" + name + ")"
+	h, err := c.ptr(op)
+	if err != nil {
+		return "", err
+	}
+	p := fns.GetPropertyStr(h, name)
 	if p == nil {
-		return "", &Error{Code: ErrPropertyUnavailable, Op: "get_property_string(" + name + ")", Msg: "property unavailable"}
+		return "", &Error{Code: ErrPropertyUnavailable, Op: op, Msg: "property unavailable"}
 	}
 	defer fns.Free(p)
 	return ffi.GoString(p), nil
@@ -170,8 +255,13 @@ func (c *Client) GetPropertyString(name string) (string, error) {
 
 // GetPropertyFlag reads a boolean property.
 func (c *Client) GetPropertyFlag(name string) (bool, error) {
+	op := "get_property(" + name + ")"
+	h, err := c.ptr(op)
+	if err != nil {
+		return false, err
+	}
 	var v int32
-	if err := checkErr("get_property("+name+")", fns.GetProperty(c.handle, name, int32(FormatFlag), unsafe.Pointer(&v))); err != nil {
+	if err := checkErr(op, fns.GetProperty(h, name, int32(FormatFlag), unsafe.Pointer(&v))); err != nil {
 		return false, err
 	}
 	return v != 0, nil
@@ -179,8 +269,13 @@ func (c *Client) GetPropertyFlag(name string) (bool, error) {
 
 // GetPropertyInt64 reads an int64 property.
 func (c *Client) GetPropertyInt64(name string) (int64, error) {
+	op := "get_property(" + name + ")"
+	h, err := c.ptr(op)
+	if err != nil {
+		return 0, err
+	}
 	var v int64
-	if err := checkErr("get_property("+name+")", fns.GetProperty(c.handle, name, int32(FormatInt64), unsafe.Pointer(&v))); err != nil {
+	if err := checkErr(op, fns.GetProperty(h, name, int32(FormatInt64), unsafe.Pointer(&v))); err != nil {
 		return 0, err
 	}
 	return v, nil
@@ -188,8 +283,13 @@ func (c *Client) GetPropertyInt64(name string) (int64, error) {
 
 // GetPropertyFloat64 reads a float64 property.
 func (c *Client) GetPropertyFloat64(name string) (float64, error) {
+	op := "get_property(" + name + ")"
+	h, err := c.ptr(op)
+	if err != nil {
+		return 0, err
+	}
 	var v float64
-	if err := checkErr("get_property("+name+")", fns.GetProperty(c.handle, name, int32(FormatDouble), unsafe.Pointer(&v))); err != nil {
+	if err := checkErr(op, fns.GetProperty(h, name, int32(FormatDouble), unsafe.Pointer(&v))); err != nil {
 		return 0, err
 	}
 	return v, nil
@@ -199,8 +299,13 @@ func (c *Client) GetPropertyFloat64(name string) (float64, error) {
 // it into native Go values (nil, bool, int64, float64, string, []any,
 // map[string]any, []byte).
 func (c *Client) GetPropertyNode(name string) (any, error) {
+	op := "get_property(" + name + ")"
+	h, err := c.ptr(op)
+	if err != nil {
+		return nil, err
+	}
 	var node Node
-	if err := checkErr("get_property("+name+")", fns.GetProperty(c.handle, name, int32(FormatNode), unsafe.Pointer(&node))); err != nil {
+	if err := checkErr(op, fns.GetProperty(h, name, int32(FormatNode), unsafe.Pointer(&node))); err != nil {
 		return nil, err
 	}
 	defer fns.FreeNodeContents(&node)
@@ -209,22 +314,40 @@ func (c *Client) GetPropertyNode(name string) (any, error) {
 
 // ObserveProperty requests property change events for name.
 func (c *Client) ObserveProperty(userdata uint64, name string, format Format) error {
-	return checkErr("observe_property("+name+")", fns.ObserveProperty(c.handle, userdata, name, int32(format)))
+	op := "observe_property(" + name + ")"
+	h, err := c.ptr(op)
+	if err != nil {
+		return err
+	}
+	return checkErr(op, fns.ObserveProperty(h, userdata, name, int32(format)))
 }
 
 // UnobserveProperty stops observing properties registered with userdata.
 func (c *Client) UnobserveProperty(userdata uint64) error {
-	return checkErr("unobserve_property", fns.UnobserveProp(c.handle, userdata))
+	h, err := c.ptr("unobserve_property")
+	if err != nil {
+		return err
+	}
+	return checkErr("unobserve_property", fns.UnobserveProp(h, userdata))
 }
 
 // RequestLogMessages sets the minimum log level ("no", "fatal", "error", "warn", "info", "v", "debug", "trace").
 func (c *Client) RequestLogMessages(minLevel string) error {
-	return checkErr("request_log_messages", fns.RequestLogMsgs(c.handle, minLevel))
+	h, err := c.ptr("request_log_messages")
+	if err != nil {
+		return err
+	}
+	return checkErr("request_log_messages", fns.RequestLogMsgs(h, minLevel))
 }
 
 // WaitEvent waits for the next mpv event. timeout < 0 waits indefinitely, 0 polls.
+// It returns nil for nil or destroyed clients.
 func (c *Client) WaitEvent(timeout float64) *Event {
-	p := fns.WaitEvent(c.handle, timeout)
+	h, err := c.ptr("wait_event")
+	if err != nil {
+		return nil
+	}
+	p := fns.WaitEvent(h, timeout)
 	if p == nil {
 		return nil
 	}
@@ -233,10 +356,11 @@ func (c *Client) WaitEvent(timeout float64) *Event {
 
 // Wakeup interrupts an active WaitEvent call.
 func (c *Client) Wakeup() {
-	if c == nil || c.handle == 0 {
+	h, err := c.ptr("wakeup")
+	if err != nil {
 		return
 	}
-	fns.Wakeup(c.handle)
+	fns.Wakeup(h)
 }
 
 // GoString copies a NUL-terminated C string from ptr.
@@ -351,11 +475,12 @@ func renderUpdateTrampoline() uintptr {
 // NewRenderContext creates an mpv_render_context for client with params.
 // params must end with a RenderParam{Type: RenderParamInvalid} sentinel.
 func NewRenderContext(client *Client, params []RenderParam) (*RenderContext, error) {
-	if client == nil || client.handle == 0 {
-		return nil, errors.New("mpv: nil client")
+	h, err := client.ptr("render_context_create")
+	if err != nil {
+		return nil, err
 	}
 	var res uintptr
-	err := checkErr("render_context_create", fns.RenderContextCreate(&res, client.handle, &params[0]))
+	err = checkErr("render_context_create", fns.RenderContextCreate(&res, h, &params[0]))
 	runtime.KeepAlive(params)
 	if err != nil {
 		return nil, err

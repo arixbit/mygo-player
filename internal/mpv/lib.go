@@ -54,9 +54,12 @@ var (
 	packageDir string
 	customPath string
 
-	loadedOnce sync.Once
+	// loadMu serializes Load attempts. A failed attempt is not cached, so a
+	// later Load (for example after SetLibraryPath or installing libmpv) can
+	// retry. loaded/loadedPath are guarded by loadMu.
+	loadMu     sync.Mutex
+	loaded     bool
 	loadedPath string
-	loadedErr  error
 	fns        libFuncs
 )
 
@@ -106,61 +109,117 @@ func LibraryPath() (string, error) {
 	return "", fmt.Errorf("mpv: %w (set %s=/path/to/%s or install libmpv)", err, ffi.EnvVar("mpv"), defaultLibFileName())
 }
 
-// Load loads libmpv and binds its C symbols once.
+// Load loads libmpv and binds its C symbols. A successful load is cached for
+// the lifetime of the process; a failed load is not, so callers may fix the
+// environment (SetLibraryPath, MYGO_NATIVE_MPV, installing libmpv) and retry.
 func Load() error {
-	loadedOnce.Do(func() {
-		if !platformSupported {
-			loadedErr = fmt.Errorf("mpv: %s/%s: %w", runtime.GOOS, runtime.GOARCH, errors.ErrUnsupported)
-			return
-		}
-		loaderMu.Lock()
-		p := customPath
-		m := manifest
-		dir := packageDir
-		loaderMu.Unlock()
+	loadMu.Lock()
+	defer loadMu.Unlock()
+	if loaded {
+		return nil
+	}
+	path, bound, err := loadLibrary()
+	if err != nil {
+		return err
+	}
+	// Publish symbols only after a complete, successful bind so a failed
+	// attempt can never leave fns partially populated.
+	fns = bound
+	loadedPath = path
+	loaded = true
+	return nil
+}
 
-		if p != "" {
-			abs, err := filepath.Abs(p)
-			if err != nil {
-				loadedErr = err
-				return
-			}
-			if err := bindPathWithFFI(abs, &fns); err != nil {
-				loadedErr = err
-				return
-			}
-			loadedPath = abs
-			return
-		}
+func loadLibrary() (string, libFuncs, error) {
+	var bound libFuncs
+	if !platformSupported {
+		return "", bound, fmt.Errorf("mpv: %s/%s: %w", runtime.GOOS, runtime.GOARCH, errors.ErrUnsupported)
+	}
+	loaderMu.Lock()
+	p := customPath
+	m := manifest
+	dir := packageDir
+	loaderMu.Unlock()
 
-		lib := newFFILib(m, dir)
-		if path, err := lib.Path(); err == nil {
-			if err := lib.Bind(&fns); err != nil {
-				loadedErr = fmt.Errorf("mpv: %w", err)
-				return
-			}
-			loadedPath = path
-			return
-		} else {
-			if !mygo.App.IsPackaged() && os.Getenv(ffi.EnvVar("mpv")) == "" {
-				if sysPath := findDevSystemLib(dir); sysPath != "" {
-					if err := bindPathWithFFI(sysPath, &fns); err != nil {
-						loadedErr = err
-						return
-					}
-					loadedPath = sysPath
-					return
-				}
-			}
-			loadedErr = fmt.Errorf("mpv: %w (set %s=/path/to/%s or install libmpv)", err, ffi.EnvVar("mpv"), defaultLibFileName())
+	if p != "" {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return "", bound, err
 		}
-	})
-	return loadedErr
+		if err := bindPathWithFFI(abs, &bound); err != nil {
+			return "", bound, err
+		}
+		return abs, bound, nil
+	}
+
+	lib := newFFILib(m, dir)
+	path, err := lib.Path()
+	if err == nil {
+		if err := lib.Bind(&bound); err != nil {
+			return "", bound, fmt.Errorf("mpv: %w", err)
+		}
+		return path, bound, nil
+	}
+	if !mygo.App.IsPackaged() && os.Getenv(ffi.EnvVar("mpv")) == "" {
+		if sysPath := findDevSystemLib(dir); sysPath != "" {
+			if err := bindPathWithFFI(sysPath, &bound); err != nil {
+				return "", bound, err
+			}
+			return sysPath, bound, nil
+		}
+	}
+	return "", bound, fmt.Errorf("mpv: %w (set %s=/path/to/%s or install libmpv)", err, ffi.EnvVar("mpv"), defaultLibFileName())
 }
 
 // LoadedPath returns the path of the loaded libmpv library, if Load succeeded.
+// It is safe to call concurrently with Load.
 func LoadedPath() string {
+	loadMu.Lock()
+	defer loadMu.Unlock()
 	return loadedPath
+}
+
+// errorTexts mirrors libmpv's mpv_error_string table so ErrorString stays
+// readable even before libmpv is loaded.
+var errorTexts = map[ErrorCode]string{
+	ErrSuccess:             "success",
+	ErrEventQueueFull:      "event queue full",
+	ErrNoMem:               "memory allocation failed",
+	ErrUninitialized:       "core not initialized",
+	ErrInvalidParameter:    "invalid parameter",
+	ErrOptionNotFound:      "option not found",
+	ErrOptionFormat:        "unsupported format for accessing option",
+	ErrOptionError:         "error setting option",
+	ErrPropertyNotFound:    "property not found",
+	ErrPropertyFormat:      "unsupported format for accessing property",
+	ErrPropertyUnavailable: "property unavailable",
+	ErrPropertyError:       "error accessing property",
+	ErrCommand:             "error running command",
+	ErrLoadingFailed:       "loading failed",
+	ErrAOInitFailed:        "audio output initialization failed",
+	ErrVOInitFailed:        "video output initialization failed",
+	ErrNothingToPlay:       "no audio or video data played",
+	ErrUnknownFormat:       "unrecognized file format",
+	ErrUnsupported:         "not supported",
+	ErrNotImplemented:      "operation not implemented",
+	ErrGeneric:             "something happened",
+}
+
+// ErrorString returns a human-readable description of an mpv error code,
+// preferring libmpv's own mpv_error_string when the library is loaded.
+func ErrorString(code ErrorCode) string {
+	loadMu.Lock()
+	ok := loaded && fns.ErrorString != nil
+	loadMu.Unlock()
+	if ok {
+		if s := fns.ErrorString(int32(code)); s != "" && s != "unknown error" {
+			return s
+		}
+	}
+	if s, ok := errorTexts[code]; ok {
+		return s
+	}
+	return fmt.Sprintf("unknown error %d", int32(code))
 }
 
 // ClientAPIVersion returns libmpv's packed client API version ((major<<16)|minor).
@@ -300,9 +359,5 @@ func checkErr(op string, code int32) error {
 	if code >= 0 {
 		return nil
 	}
-	msg := ""
-	if fns.ErrorString != nil {
-		msg = fns.ErrorString(code)
-	}
-	return &Error{Code: ErrorCode(code), Op: op, Msg: msg}
+	return &Error{Code: ErrorCode(code), Op: op, Msg: ErrorString(ErrorCode(code))}
 }

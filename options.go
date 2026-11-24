@@ -110,9 +110,9 @@ type Options struct {
 	// Defaults to true when KeepOpen is nil.
 	KeepOpen *bool
 	// Volume sets initial volume in [0, 100] (or higher for software boost).
-	// Defaults to 100 when <= 0 and StartMuted is false.
+	// Defaults to 100 when <= 0 (also with StartMuted, so unmuting is audible).
 	Volume float64
-	// StartMuted mutes audio on creation.
+	// StartMuted mutes audio on creation without changing Volume.
 	StartMuted bool
 	// Loop loops the current file indefinitely when true.
 	Loop bool
@@ -135,10 +135,18 @@ type Options struct {
 	// Runs on the player's background event goroutine.
 	OnLog func(level, prefix, text string)
 	// OnStateChange is invoked when playback state, tracks, or metadata change.
-	// Runs on the player's background event goroutine; calls to Player methods are safe.
+	// Position-only updates are throttled to about one call per 100ms (the
+	// Snapshot itself keeps full precision); state changes and seeks notify
+	// immediately. Usually runs on the player's background event goroutine
+	// (or the goroutine calling Open/Stop/track methods, after internal locks
+	// are released). Calling any Player method, including Close, is safe.
 	OnStateChange func()
 	// OnEndFile is invoked when playback of a file ends (EOF, stop, or error).
-	// Runs on the player's background event goroutine.
+	// With KeepOpen (default) the file stays loaded at EOF, so OnEndFile(nil)
+	// is delivered once when EOF is first reached; replaying (Play/seek back)
+	// or opening media re-arms it, and a later Stop/Open of the same ended
+	// file does not report it again. Errors carry a readable libmpv message.
+	// Runs on the player's background event goroutine; calling Close is safe.
 	OnEndFile func(err error)
 }
 
@@ -180,4 +188,17 @@ type Snapshot struct {
 	SubVisible   bool
 	Tracks       []Track
 	Err          error
+
+	// SubDelay is the subtitle delay (see SetSubtitleDelay).
+	SubDelay time.Duration
+	// AudioDelay is the audio delay (see SetAudioDelay).
+	AudioDelay time.Duration
+	// SubScale is the subtitle scale factor (default 1.0).
+	SubScale float64
+	// SubPos is the vertical subtitle position in percent (default 100).
+	SubPos int
+	// VideoRotate is the clockwise video rotation in degrees.
+	VideoRotate int
+	// Panscan is the crop-to-fill amount in [0, 1] (see SetPanscan).
+	Panscan float64
 }

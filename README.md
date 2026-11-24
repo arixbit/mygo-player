@@ -135,6 +135,29 @@ _ = p.SetHWDec(player.HWDecAutoCopy)
 log.Println("Active hwdec:", p.CurrentHWDec())
 ```
 
+## Audio/Video & Subtitle Fine-Tuning
+
+All tuning methods return `ErrClosed` after `Close`, reject out-of-range values with an error, redraw the current frame when the picture changes, and are mirrored in `Snapshot()` (also when changed via `SetPropertyString`):
+
+| Method | Range | Snapshot field |
+| --- | --- | --- |
+| `SetSubtitleDelay(d time.Duration)` / `SetAudioDelay(d time.Duration)` | any (positive = later) | `SubDelay` / `AudioDelay` |
+| `SetSubtitleScale(f float64)` | `(0, 100]`, default `1.0` | `SubScale` |
+| `SetSubtitlePos(p int)` | `0..150` (% of height), default `100` | `SubPos` |
+| `SetVideoRotate(deg int)` | `0`, `90`, `180`, `270` | `VideoRotate` |
+| `SetPanscan(f float64)` | `0..1` (`1` = crop to fill the View) | `Panscan` |
+| `FrameStep()` / `FrameBackStep()` | pause and step one frame forward / back | `Position` |
+
+```go
+_ = p.SetSubtitleDelay(250 * time.Millisecond)
+_ = p.SetSubtitleScale(1.2)
+_ = p.SetPanscan(1.0) // fill a View whose aspect differs from the video (no black bars)
+```
+
+> `View` always renders at the element's full size (libmpv letterboxes inside it, keeping subtitles sharp), so `Fit(ui.Cover)` does not remove black bars — use `SetPanscan`.
+
+Playback notes: `TogglePause`/`Play` at EOF replay from the start; with the default `KeepOpen`, `OnEndFile(nil)` fires once when EOF is reached; `Close` may be called from inside `OnStateChange`/`OnEndFile`; position-only `OnStateChange` notifications are throttled to ~100 ms while `Snapshot().Position` keeps full precision.
+
 ## Headless UI Testing (`ui.NewTester`)
 
 Because `player.View` renders straight into MyGo's scene graph, you can test player layouts, HUD overlays, empty/idle states, and HiDPI viewport sizing deterministically with MyGo's headless `ui.NewTester`—without opening a window or even installing `libmpv`:

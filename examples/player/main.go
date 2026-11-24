@@ -1,7 +1,8 @@
 // Example player demonstrates github.com/arixbit/mygo-player in a MyGo native
-// UI window on macOS with zero-copy GPU rendering (IOSurface -> Metal), MKV
-// playback, multi-audio track switching, embedded & external subtitles,
-// hardware decoding (VideoToolbox), and custom HTTP headers.
+// UI window on macOS (zero-copy IOSurface -> Metal), Windows and Linux
+// (software render API -> ui.Bitmap): MKV playback, multi-audio track
+// switching, embedded & external subtitles, hardware decoding (VideoToolbox,
+// D3D11VA, VA-API), and custom HTTP headers.
 //
 // Usage:
 //
@@ -16,7 +17,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -41,9 +44,13 @@ func (h headerFlags) Set(v string) error {
 type demoApp struct {
 	win       *mygo.Window
 	p         *player.Player
-	hwdecMode player.HWDecMode
-	lastErr   string
-	filePath  string
+	hwdecMode player.HWDecMode // UI thread only
+
+	// mu guards lastErr and filePath, which are written from dialog
+	// goroutines and read by the UI thread.
+	mu       sync.Mutex
+	lastErr  string
+	filePath string
 
 	initialTarget string
 	initialOpts   player.OpenOptions
@@ -54,7 +61,7 @@ func main() {
 	flag.Var(headers, "header", "Custom HTTP header 'Key: Value' (repeatable)")
 	ua := flag.String("ua", "", "Custom HTTP User-Agent")
 	ref := flag.String("referer", "", "Custom HTTP Referer")
-	hwdec := flag.String("hwdec", "", "Hardware decoding mode (empty = platform default: auto-safe on macOS, auto-copy on Windows)")
+	hwdec := flag.String("hwdec", "", "Hardware decoding mode (empty = platform default: auto-safe on macOS, auto-copy on Windows/Linux)")
 	subPath := flag.String("sub", "", "External subtitle file (.srt, .ass, .vtt) to load with media")
 	libPath := flag.String("libmpv", "", "Explicit path to libmpv dynamic library (optional, overrides MYGO_NATIVE_MPV)")
 	logLevel := flag.String("log", "", "libmpv log level (e.g. warn, info, v)")
@@ -103,7 +110,7 @@ func main() {
 			initialOpts:   initialOpts,
 		}
 		app.win = mygo.NewWindow(mygo.WindowOptions{
-			Title:   "MyGo Player (libmpv Zero-Copy)",
+			Title:   appTitle,
 			Width:   1120,
 			Height:  680,
 			Content: ui.View(app.view),
@@ -121,11 +128,36 @@ func main() {
 	}
 }
 
+const appTitle = "MyGo Player (libmpv)"
+
+// openShortcutLabel names the platform's ui.Cmd modifier (Command on macOS,
+// Ctrl elsewhere) for on-screen hints.
+func openShortcutLabel() string {
+	if runtime.GOOS == "darwin" {
+		return "Cmd+O"
+	}
+	return "Ctrl+O"
+}
+
+func (a *demoApp) setErr(msg string) {
+	a.mu.Lock()
+	a.lastErr = msg
+	a.mu.Unlock()
+}
+
+func (a *demoApp) uiState() (lastErr, filePath string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.lastErr, a.filePath
+}
+
 func (a *demoApp) openTarget(target string, opts player.OpenOptions) {
+	a.mu.Lock()
 	a.filePath = target
 	a.lastErr = ""
+	a.mu.Unlock()
 	if err := a.p.Open(target, opts); err != nil {
-		a.lastErr = err.Error()
+		a.setErr(err.Error())
 		if a.win != nil {
 			a.win.Invalidate()
 		}
@@ -167,7 +199,7 @@ func (a *demoApp) pickSubtitleFile() {
 			return
 		}
 		if err := a.p.AddSubtitleFile(paths[0], player.SubtitleSelect); err != nil {
-			a.lastErr = err.Error()
+			a.setErr(err.Error())
 		}
 		if a.win != nil {
 			a.win.Invalidate()
@@ -177,6 +209,7 @@ func (a *demoApp) pickSubtitleFile() {
 
 func (a *demoApp) view(c *ui.Context) {
 	snap := a.p.Snapshot()
+	lastErr, filePath := a.uiState()
 
 	// Keyboard shortcuts.
 	if c.Shortcut(0, ui.KeySpace) && !c.ShortcutRepeated() {
@@ -206,15 +239,15 @@ func (a *demoApp) view(c *ui.Context) {
 		// Center state overlay (idle prompt, buffering spinner, or error banner).
 		ui.Column(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Center().Gap(12).Children(func() {
 			switch {
-			case a.lastErr != "":
-				ui.Text(c, "Error: "+a.lastErr).TextColor(ui.RGB(255, 110, 110)).Background(hudBg).Padding(12).Radius(8)
+			case lastErr != "":
+				ui.Text(c, "Error: "+lastErr).TextColor(ui.RGB(255, 110, 110)).Background(hudBg).Padding(12).Radius(8)
 			case snap.Err != nil:
 				ui.Text(c, "Playback error: "+snap.Err.Error()).TextColor(ui.RGB(255, 110, 110)).Background(hudBg).Padding(12).Radius(8)
 			case snap.State == player.StateIdle:
 				ui.Column(c).Center().Gap(10).Padding(20).Background(hudBg).Radius(12).Children(func() {
-					ui.Text(c, "MyGo Player (libmpv Zero-Copy)").FontSize(20).Bold().TextColor(white)
+					ui.Text(c, appTitle).FontSize(20).Bold().TextColor(white)
 					ui.Text(c, "Open a local MKV/MP4 file or pass a path/URL on the command line.").TextColor(mutedText)
-					if ui.PrimaryButton(c.Key("open-empty"), "Open Video (Cmd+O)").Clicked() {
+					if ui.PrimaryButton(c.Key("open-empty"), "Open Video ("+openShortcutLabel()+")").Clicked() {
 						a.pickMediaFile()
 					}
 				})
@@ -226,8 +259,8 @@ func (a *demoApp) view(c *ui.Context) {
 		// Top info bar (status, active hwdec, resolution, rendered frames).
 		ui.Row(c).Absolute().Top(12).Left(12).Right(12).Padding(8).PaddingX(12).Gap(10).AlignItems(ui.Center).Background(hudBg).Radius(10).Children(func() {
 			title := snap.MediaTitle
-			if title == "" && a.filePath != "" {
-				title = filepath.Base(a.filePath)
+			if title == "" && filePath != "" {
+				title = filepath.Base(filePath)
 			}
 			if title == "" {
 				title = "No media loaded"
@@ -349,18 +382,19 @@ func (a *demoApp) view(c *ui.Context) {
 						label string
 						mode  player.HWDecMode
 					}{
-						{"Auto Safe (Zero-Copy / macOS)", player.HWDecAutoSafe},
-						{"Auto Copy (Windows / Copy-Back)", player.HWDecAutoCopy},
-						{"VideoToolbox (Zero-Copy)", player.HWDecVideoToolbox},
-						{"VideoToolbox (Copy-Back)", player.HWDecVideoToolboxCopy},
+						{"Auto Safe (macOS default)", player.HWDecAutoSafe},
+						{"Auto Copy (Windows / Linux default)", player.HWDecAutoCopy},
+						{"VideoToolbox (macOS Zero-Copy)", player.HWDecVideoToolbox},
+						{"VideoToolbox (macOS Copy-Back)", player.HWDecVideoToolboxCopy},
 						{"D3D11VA (Windows Copy-Back)", player.HWDecD3D11VACopy},
+						{"VA-API (Linux Copy-Back)", player.HWDecVAAPICopy},
 						{"Software (Disabled)", player.HWDecNone},
 					}
 					for _, item := range modes {
 						if m.Item(item.label).Checked(a.hwdecMode == item.mode).Chosen() {
 							a.hwdecMode = item.mode
 							if err := a.p.SetHWDec(item.mode); err != nil {
-								a.lastErr = err.Error()
+								a.setErr(err.Error())
 							}
 						}
 					}
