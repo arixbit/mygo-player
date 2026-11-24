@@ -29,8 +29,8 @@ MyGo 内置的 `ui/video` 直接调用各操作系统的原生媒体框架（AVF
 | `darwin-arm64` | 零拷贝 GPU 渲染（`IOSurface` -> Metal `*native.Texture`） | `auto-safe`（VideoToolbox） | CoreAudio | 已发布（`scripts/build-libmpv-macos.sh`） |
 | `darwin-amd64` | 零拷贝 GPU 渲染（`IOSurface` -> Metal `*native.Texture`） | `auto-safe`（VideoToolbox） | CoreAudio | 已发布（`scripts/build-libmpv-macos.sh`） |
 | `windows-amd64` | 双缓冲 `*ui.Bitmap` 图层合成（`MPV_RENDER_API_TYPE_SW`，无子窗口 HWND 遮挡） | `auto-copy`（D3D11VA） | WASAPI | 已发布（`scripts/build-libmpv-windows.sh`） |
-| `linux-amd64` | 双缓冲 `*ui.Bitmap` 图层合成（`MPV_RENDER_API_TYPE_SW`） | `auto-copy`（VA-API / 自动回退软解） | PulseAudio（兼容 `pipewire-pulse`）/ ALSA | 支持系统 `libmpv` 或 `scripts/build-libmpv-linux.sh`（CI 已就绪） |
-| `linux-arm64` | 双缓冲 `*ui.Bitmap` 图层合成（`MPV_RENDER_API_TYPE_SW`） | `auto-copy`（回读硬解 / 自动回退软解） | PulseAudio（兼容 `pipewire-pulse`）/ ALSA | 支持系统 `libmpv` 或 `scripts/build-libmpv-linux.sh`（CI 已就绪） |
+| `linux-amd64` | 双缓冲 `*ui.Bitmap` 图层合成（`MPV_RENDER_API_TYPE_SW`） | `auto-copy`（VA-API / 自动回退软解） | PulseAudio（兼容 `pipewire-pulse`）/ ALSA | 已发布（`scripts/build-libmpv-linux.sh`） |
+| `linux-arm64` | 双缓冲 `*ui.Bitmap` 图层合成（`MPV_RENDER_API_TYPE_SW`） | `auto-copy`（回读硬解 / 自动回退软解） | PulseAudio（兼容 `pipewire-pulse`）/ ALSA | 已发布（`scripts/build-libmpv-linux.sh`） |
 
 > **其他平台（`js/wasm`、iOS、Android）：** 编译时不引入桌面 `purego` / 渲染依赖（`js/wasm` 支持零 cgo 直接编译），运行时调用会返回标准错误 `errors.ErrUnsupported`，方便跨平台项目安全引入。
 

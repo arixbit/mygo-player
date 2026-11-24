@@ -29,8 +29,8 @@ MyGo's built-in `ui/video` wraps each OS's media framework (AVFoundation, Media 
 | `darwin-arm64` | Zero-copy GPU (`IOSurface` -> Metal `*native.Texture`) | `auto-safe` (VideoToolbox) | CoreAudio | Published (`scripts/build-libmpv-macos.sh`) |
 | `darwin-amd64` | Zero-copy GPU (`IOSurface` -> Metal `*native.Texture`) | `auto-safe` (VideoToolbox) | CoreAudio | Published (`scripts/build-libmpv-macos.sh`) |
 | `windows-amd64` | Double-buffered `*ui.Bitmap` (`MPV_RENDER_API_TYPE_SW`, no child HWND occlusion) | `auto-copy` (D3D11VA) | WASAPI | Published (`scripts/build-libmpv-windows.sh`) |
-| `linux-amd64` | Double-buffered `*ui.Bitmap` (`MPV_RENDER_API_TYPE_SW`) | `auto-copy` (VA-API / SW fallback) | PulseAudio (incl. `pipewire-pulse`) / ALSA | System `libmpv` or `scripts/build-libmpv-linux.sh` (CI ready) |
-| `linux-arm64` | Double-buffered `*ui.Bitmap` (`MPV_RENDER_API_TYPE_SW`) | `auto-copy` (copy-back / SW fallback) | PulseAudio (incl. `pipewire-pulse`) / ALSA | System `libmpv` or `scripts/build-libmpv-linux.sh` (CI ready) |
+| `linux-amd64` | Double-buffered `*ui.Bitmap` (`MPV_RENDER_API_TYPE_SW`) | `auto-copy` (VA-API / SW fallback) | PulseAudio (incl. `pipewire-pulse`) / ALSA | Published (`scripts/build-libmpv-linux.sh`) |
+| `linux-arm64` | Double-buffered `*ui.Bitmap` (`MPV_RENDER_API_TYPE_SW`) | `auto-copy` (copy-back / SW fallback) | PulseAudio (incl. `pipewire-pulse`) / ALSA | Published (`scripts/build-libmpv-linux.sh`) |
 
 > **Unsupported targets (`js/wasm`, iOS, Android):** `mygo-player` compiles cleanly without desktop `purego`/renderer dependencies (`CGO_ENABLED=0` for `js/wasm`) and returns `errors.ErrUnsupported` at runtime, so cross-platform codebases can import it safely.
 

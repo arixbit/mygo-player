@@ -61,10 +61,10 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Install libmpv and ffmpeg for integration tests
+      - name: Install ffmpeg for integration tests
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libmpv-dev ffmpeg
+          sudo apt-get install -y --no-install-recommends ffmpeg
 
       - name: Vet and build (zero cgo)
         env:
