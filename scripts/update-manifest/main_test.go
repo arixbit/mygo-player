@@ -12,6 +12,8 @@ func TestRunUpdatesManifestAndCopiesAssets(t *testing.T) {
 	armSrc := filepath.Join(tmp, "arm64.dylib")
 	amdSrc := filepath.Join(tmp, "amd64.dylib")
 	winSrc := filepath.Join(tmp, "mpv-2.dll")
+	linuxAmdSrc := filepath.Join(tmp, "linux-amd64.so")
+	linuxArmSrc := filepath.Join(tmp, "linux-arm64.so")
 	if err := os.WriteFile(armSrc, []byte("fake-arm64-dylib"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -19,6 +21,12 @@ func TestRunUpdatesManifestAndCopiesAssets(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(winSrc, []byte("fake-windows-amd64-dll"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(linuxAmdSrc, []byte("fake-linux-amd64-so"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(linuxArmSrc, []byte("fake-linux-arm64-so"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -43,6 +51,15 @@ func TestRunUpdatesManifestAndCopiesAssets(t *testing.T) {
 		t.Fatalf("run (windows) failed: %v", err)
 	}
 
+	// Third incremental run adds linux targets while preserving darwin and windows entries.
+	err = run(manifestPath, "mpv", source, release, outDir, map[string]string{
+		"linux-amd64": linuxAmdSrc,
+		"linux-arm64": linuxArmSrc,
+	})
+	if err != nil {
+		t.Fatalf("run (linux) failed: %v", err)
+	}
+
 	raw, err := os.ReadFile(manifestPath)
 	if err != nil {
 		t.Fatal(err)
@@ -63,6 +80,8 @@ func TestRunUpdatesManifestAndCopiesAssets(t *testing.T) {
 		{"darwin-arm64", "libmpv.dylib", "libmpv", ".dylib"},
 		{"darwin-amd64", "libmpv.dylib", "libmpv", ".dylib"},
 		{"windows-amd64", "mpv-2.dll", "mpv-2", ".dll"},
+		{"linux-amd64", "libmpv.so", "libmpv", ".so"},
+		{"linux-arm64", "libmpv.so", "libmpv", ".so"},
 	} {
 		f, ok := m.Libraries[0].Files[tc.target]
 		if !ok {

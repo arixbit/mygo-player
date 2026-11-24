@@ -10,8 +10,9 @@ const (
 	// macOS) and falls back to software decoding for unsupported streams.
 	HWDecAutoSafe HWDecMode = "auto-safe"
 	// HWDecAutoCopy enables safe copy-back hardware decoding (such as D3D11VA on
-	// Windows or VideoToolbox copy-back on macOS) and falls back to software
-	// decoding for unsupported streams. Default on Windows.
+	// Windows, VA-API/NVDEC on Linux, or VideoToolbox copy-back on macOS) and
+	// falls back to software decoding for unsupported streams. Default on Windows
+	// and Linux.
 	HWDecAutoCopy HWDecMode = "auto-copy"
 	// HWDecVideoToolbox explicitly requests Apple VideoToolbox zero-copy decoding.
 	HWDecVideoToolbox HWDecMode = "videotoolbox"
@@ -19,6 +20,8 @@ const (
 	HWDecVideoToolboxCopy HWDecMode = "videotoolbox-copy"
 	// HWDecD3D11VACopy explicitly requests Windows D3D11VA hardware decoding with copy-back.
 	HWDecD3D11VACopy HWDecMode = "d3d11va-copy"
+	// HWDecVAAPICopy explicitly requests Linux VA-API hardware decoding with copy-back.
+	HWDecVAAPICopy HWDecMode = "vaapi-copy"
 	// HWDecNone disables hardware decoding (software decoding only).
 	HWDecNone HWDecMode = "no"
 )
@@ -101,7 +104,7 @@ func (s State) String() string {
 // Options configures a new Player created by New.
 type Options struct {
 	// HWDec configures hardware decoding. Defaults to HWDecAutoSafe on macOS
-	// and HWDecAutoCopy on Windows.
+	// and HWDecAutoCopy on Windows and Linux.
 	HWDec HWDecMode
 	// KeepOpen keeps the last frame visible when playback reaches EOF.
 	// Defaults to true when KeepOpen is nil.
@@ -120,7 +123,8 @@ type Options struct {
 	// Referrer sets the default HTTP Referer header for network streams.
 	Referrer string
 	// AudioOutput overrides mpv's "ao" option (e.g. "null" for headless tests).
-	// Defaults to "wasapi" on Windows and mpv's native default on macOS.
+	// Defaults to "wasapi" on Windows and mpv's native default on macOS
+	// (CoreAudio) and Linux (PipeWire/PulseAudio/ALSA).
 	AudioOutput string
 	// LogLevel enables libmpv log callbacks ("fatal", "error", "warn", "info", "v", "debug").
 	// Empty disables log message delivery.
@@ -158,22 +162,22 @@ type OpenOptions struct {
 // Snapshot is an immutable point-in-time summary of player state suitable for
 // reading in UI view functions without taking locks repeatedly.
 type Snapshot struct {
-	State          State
-	Position       time.Duration
-	Duration       time.Duration
-	Volume         float64
-	Muted          bool
-	Speed          float64
-	Paused         bool
-	Buffering      bool
-	EOF            bool
-	VideoWidth     int
-	VideoHeight    int
-	CurrentHWDec   string
-	MediaTitle     string
-	AudioTrackID   int64
-	SubTrackID     int64
-	SubVisible     bool
-	Tracks         []Track
-	Err            error
+	State        State
+	Position     time.Duration
+	Duration     time.Duration
+	Volume       float64
+	Muted        bool
+	Speed        float64
+	Paused       bool
+	Buffering    bool
+	EOF          bool
+	VideoWidth   int
+	VideoHeight  int
+	CurrentHWDec string
+	MediaTitle   string
+	AudioTrackID int64
+	SubTrackID   int64
+	SubVisible   bool
+	Tracks       []Track
+	Err          error
 }

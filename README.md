@@ -1,16 +1,38 @@
+English | [中文文档](README_ZH.md)
+
 # mygo-player
 
-Standalone community video player plugin for [MyGo](https://github.com/egoist/mygo) (`v0.10.0`), powered by **libmpv** (LGPL 2.1+) with **zero cgo**, `mygo/ffi`, `mygo-plugin.json`, zero-copy GPU rendering on macOS (`IOSurface` → Metal `*native.Texture`), and double-buffered `ui.Bitmap` compositing on Windows (`MPV_RENDER_API_TYPE_SW` + `hwdec=auto-copy` + `ao=wasapi`, with no child HWND occlusion).
+Standalone native UI video player plugin for [MyGo](https://github.com/egoist/mygo) (`v0.10.0`), powered by **libmpv** (LGPL 2.1+) with **zero cgo** (`CGO_ENABLED=0`).
 
-## Features
+`mygo-player` follows the same plugin layout as official MyGo native plugins (`mygo-plugin.json`, `mygo/ffi`, `Load`, `LibraryPath`, `New`, `View`). Frames render directly inside MyGo's native UI scene graph—never as a separate native child window—so HUD controls, danmaku, rounded corners, and popovers always composite cleanly above the video.
 
-- **Zero cgo**: Pure Go bindings via `github.com/egoist/mygo/ffi` + `purego` (`CGO_ENABLED=0`) shared across macOS and Windows.
-- **Zero-Copy GPU Rendering (macOS)**: Renders `libmpv` frames (`MPV_RENDER_API_TYPE_OPENGL`) via a pooled `CGL` + `IOSurface` (BGRA8Unorm) ring directly into MyGo's `*native.Texture` (`MTLTexture`).
-- **Scene-Graph Composited Rendering (Windows `windows-amd64`)**: Renders `libmpv` frames (`MPV_RENDER_API_TYPE_SW` + `hwdec=auto-copy` / `d3d11va-copy` + `ao=wasapi`) at viewport physical size into a double-buffered `ui.Bitmap` (`UpdateYUV` NV12 preferred, `Update` RGBA fallback), keeping danmaku, translucent glass HUDs, rounded corners, and popovers cleanly above video without child HWND occlusion.
-- **Hardware Decoding**: Apple VideoToolbox (`auto-safe` / `videotoolbox` / `videotoolbox-copy`), Windows D3D11VA (`auto-copy` / `d3d11va-copy`), or software (`no`), dynamically switchable at runtime.
-- **Multi-Audio & Subtitles**: Inspect `AudioTracks()` / `SubtitleTracks()`, switch tracks on the fly, toggle visibility, and attach external subtitles (`AddSubtitleFile` for `.srt`, `.ass`, `.ssa`, `.vtt`, `.sup`).
-- **Custom HTTP Headers**: Per-open and default HTTP headers (`Headers`, `UserAgent`, `Referrer`) passed via libmpv structured node arrays (`http-header-fields`) with automatic isolation between `Open()` calls.
-- **MyGo Plugin Manifest (`mygo-plugin.json`)**: Compatible with `mygo dev`, `mygo build`, `MYGO_NATIVE_MPV`, and automated GitHub Actions LGPL-2.1+ builds.
+## Why `mygo-player` vs Built-in `ui/video`?
+
+MyGo's built-in `ui/video` wraps each OS's media framework (AVFoundation, Media Foundation, GStreamer, and browser `<video>`). It requires no extra native library and is ideal for simple MP4/H.264 clips or web builds. `mygo-player` complements `ui/video` when your desktop app needs full media-player features:
+
+| Capability | Built-in `ui/video` | `mygo-player` |
+| --- | --- | --- |
+| Media engine | OS media frameworks (AVFoundation / Media Foundation / GStreamer / `<video>`) | Embedded `libmpv` (LGPL 2.1+) via `mygo/ffi`, zero cgo |
+| Extra native library | None | `libmpv` shared library (auto-managed via `mygo-plugin.json`) |
+| Formats & codecs | MP4 / MOV (H.264 / AAC) everywhere; HEVC / VP9 / AV1 depend on OS decoders | Full format playback out of the box (MKV, MP4, WebM, TS, FLV; H.264, HEVC, AV1, VP9, etc.) |
+| Multi-audio tracks | Not exposed | List, switch, and disable audio tracks at runtime |
+| Subtitles | Not exposed | Embedded subtitles + external subtitle files (SRT, ASS/SSA, VTT, SUP) with libass styling & toggle |
+| Online streams & auth | Plain URLs via `OpenURL` | Custom HTTP headers per stream (auth tokens, cookies, anti-hotlink `Referer` & `User-Agent`), isolated per `Open()` |
+| Hardware decoding control | Managed automatically by OS | Configurable & switchable at runtime (VideoToolbox, D3D11VA, VA-API, or software) |
+| UI overlay compositing | Scene-graph composited | Scene-graph composited (HUD controls, danmaku, popovers, rounded corners stay above video) |
+| Best fit | Trailers, onboarding clips, lightweight embeds, browser/WASM apps | Media players, anime/movie apps, NAS/Emby/Jellyfin clients, authenticated stream players |
+
+## Platform Support
+
+| Platform | Rendering Path | Default HWDec | Audio Output | Prebuilt `mygo-plugin.json` / Build |
+| --- | --- | --- | --- | --- |
+| `darwin-arm64` | Zero-copy GPU (`IOSurface` -> Metal `*native.Texture`) | `auto-safe` (VideoToolbox) | CoreAudio | Published (`scripts/build-libmpv-macos.sh`) |
+| `darwin-amd64` | Zero-copy GPU (`IOSurface` -> Metal `*native.Texture`) | `auto-safe` (VideoToolbox) | CoreAudio | Published (`scripts/build-libmpv-macos.sh`) |
+| `windows-amd64` | Double-buffered `*ui.Bitmap` (`MPV_RENDER_API_TYPE_SW`, no child HWND occlusion) | `auto-copy` (D3D11VA) | WASAPI | Published (`scripts/build-libmpv-windows.sh`) |
+| `linux-amd64` | Double-buffered `*ui.Bitmap` (`MPV_RENDER_API_TYPE_SW`) | `auto-copy` (VA-API / SW fallback) | PulseAudio (incl. `pipewire-pulse`) / ALSA | System `libmpv` or `scripts/build-libmpv-linux.sh` (CI ready) |
+| `linux-arm64` | Double-buffered `*ui.Bitmap` (`MPV_RENDER_API_TYPE_SW`) | `auto-copy` (copy-back / SW fallback) | PulseAudio (incl. `pipewire-pulse`) / ALSA | System `libmpv` or `scripts/build-libmpv-linux.sh` (CI ready) |
+
+> **Unsupported targets (`js/wasm`, iOS, Android):** `mygo-player` compiles cleanly without desktop `purego`/renderer dependencies (`CGO_ENABLED=0` for `js/wasm`) and returns `errors.ErrUnsupported` at runtime, so cross-platform codebases can import it safely.
 
 ## Installation
 
@@ -18,7 +40,12 @@ Standalone community video player plugin for [MyGo](https://github.com/egoist/my
 go get github.com/arixbit/mygo-player
 ```
 
+- Requires **Go** and **MyGo (`v0.10.0`)** with **`CGO_ENABLED=0`**.
+- `mygo-plugin.json` is embedded in the package, so `mygo dev` and `mygo build` automatically discover and bundle `libmpv`.
+
 ## Quick Start
+
+Leave `HWDec` empty to use the recommended platform default automatically (`auto-safe` on macOS, `auto-copy` on Windows and Linux):
 
 ```go
 package main
@@ -26,16 +53,14 @@ package main
 import (
 	"log"
 
+	player "github.com/arixbit/mygo-player"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
-	player "github.com/arixbit/mygo-player"
 )
 
 func main() {
 	mygo.App.WhenReady(func() {
-		p, err := player.New(player.Options{
-			HWDec: player.HWDecAutoSafe, // VideoToolbox on macOS
-		})
+		p, err := player.New(player.Options{})
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -60,10 +85,33 @@ func main() {
 }
 ```
 
-### Custom HTTP Headers, Audio & Subtitles
+### Running the Example Player
+
+```bash
+# Uses the published libmpv (via mygo-plugin.json) or a locally installed libmpv:
+CGO_ENABLED=0 go run ./examples/player /path/to/video.mkv
+
+# Or point to a specific libmpv shared library (.dylib / .dll / .so):
+MYGO_NATIVE_MPV=/path/to/libmpv.dylib CGO_ENABLED=0 go run ./examples/player \
+  -sub /path/to/subtitle.srt \
+  /path/to/video.mkv
+```
+
+Keyboard shortcuts in `examples/player`:
+- `Space`: Play / Pause
+- `Left` / `Right`: Seek -5s / +5s
+- `M`: Mute / Unmute
+- `Cmd+O` (macOS) / `Ctrl+O` (Windows & Linux): Open local video file
+
+## Audio Tracks, Subtitles & Online Streams (Custom Headers)
+
+- **Online streams with custom HTTP headers:** Pass auth tokens (`Authorization`), session `Cookie`s, and anti-hotlink `Referer` / `User-Agent` headers per stream. Per-open headers are isolated and automatically reset on the next `Open()` call so credentials never leak between videos.
+- **Multi-audio tracks:** Inspect all embedded audio streams (`AudioTracks()`), switch languages/commentary tracks on the fly (`SelectAudioTrack`), or mute audio decoding (`DisableAudioTrack`).
+- **Embedded & external subtitles:** Switch between embedded tracks or attach external subtitle files (`.srt`, `.ass`, `.ssa`, `.vtt`, `.sup`) with `AddSubtitleFile`, and show/hide them anytime (`SetSubtitleVisible`).
+- **Runtime hardware decoding:** Switch modes dynamically with `SetHWDec` (`HWDecAutoSafe`, `HWDecAutoCopy`, `HWDecVideoToolbox`, `HWDecD3D11VACopy`, `HWDecVAAPICopy`, `HWDecNone`) and inspect the active decoder with `CurrentHWDec()`.
 
 ```go
-// Open a network stream with per-request HTTP headers (isolated per Open call).
+// Play an online stream with auth token, cookie, and anti-hotlink Referer & User-Agent.
 err := p.Open("https://media.example.com/episode.mkv", player.OpenOptions{
 	Headers: map[string]string{
 		"Authorization": "Bearer your-token",
@@ -73,52 +121,67 @@ err := p.Open("https://media.example.com/episode.mkv", player.OpenOptions{
 	Referrer:  "https://media.example.com/",
 })
 
-// Switch audio tracks & subtitles.
-audios := p.AudioTracks()
-_ = p.SelectAudioTrack(audios[1].ID)
+// Switch audio tracks.
+if audios := p.AudioTracks(); len(audios) > 1 {
+	_ = p.SelectAudioTrack(audios[1].ID)
+}
 
-_ = p.AddSubtitleFile("/path/to/chinese.ass", player.SubtitleSelect)
+// Load an external subtitle (SRT/ASS/VTT/SUP) and toggle visibility.
+_ = p.AddSubtitleFile("/path/to/subtitle.ass", player.SubtitleSelect)
 _ = p.SetSubtitleVisible(true)
 
-// Query or change hardware decoding mode.
-_ = p.SetHWDec(player.HWDecVideoToolbox)
+// Query or switch hardware decoding at runtime.
+_ = p.SetHWDec(player.HWDecAutoCopy)
 log.Println("Active hwdec:", p.CurrentHWDec())
 ```
 
-## Running the Example Player
+## Headless UI Testing (`ui.NewTester`)
 
-```bash
-# With a published libmpv (via mygo-plugin.json) or Homebrew mpv (`brew install mpv`):
-CGO_ENABLED=0 go run ./examples/player /path/to/video.mkv
+Because `player.View` renders straight into MyGo's scene graph, you can test player layouts, HUD overlays, empty/idle states, and HiDPI viewport sizing deterministically with MyGo's headless `ui.NewTester`—without opening a window or even installing `libmpv`:
 
-# Or explicitly specify a libmpv dylib:
-MYGO_NATIVE_MPV=/path/to/libmpv.dylib CGO_ENABLED=0 go run ./examples/player \
-  -hwdec auto-safe \
-  -sub /path/to/subtitle.srt \
-  /path/to/video.mkv
+```go
+func TestPlayerOverlay(t *testing.T) {
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Box(c).Fill().Children(func() {
+			player.View(c, nil).Fill()
+			ui.Text(c, "Paused").Absolute().Left(16).Top(16)
+		})
+	}, 320, 180)
+	tt.Frame()
+
+	if !tt.HasText("Paused") {
+		t.Fatal("expected overlay text to render above player.View")
+	}
+}
 ```
 
-Keyboard shortcuts in `examples/player`:
-- `Space`: Play / Pause
-- `Left` / `Right`: Seek -5s / +5s
-- `M`: Mute / Unmute
-- `Cmd+O`: Open local video file
+Run tests locally:
 
-## Native Library Lookup & Releases
+```bash
+# Fast headless UI & unit tests (no libmpv required):
+CGO_ENABLED=0 go test -v -run 'TestView|TestManifest|TestSplitHTTP|TestParseTrack|TestSWRenderer' ./...
 
-`mygo-player` embeds `mygo-plugin.json` and resolves `libmpv` via `mygo/ffi`:
-1. `$MYGO_NATIVE_MPV` environment variable (or `player.SetLibraryPath(...)`).
-2. Packaged app resources (`Contents/Resources/libmpv.dylib`) / `Contents/Frameworks/` / executable directory.
-3. Local `.mygo/native/<goos>-<goarch>/libmpv.dylib` (unpackaged runs).
-4. Published SHA-256 verified binary declared in `mygo-plugin.json` (downloaded once into user cache in unpackaged runs; bundled by `mygo build`).
-5. Standard macOS Homebrew paths (`/opt/homebrew/lib/libmpv.dylib`, `/usr/local/lib/libmpv.dylib`) as an unpackaged dev fallback.
+# Full test suite including real MKV playback integration tests (requires libmpv + ffmpeg):
+CGO_ENABLED=0 MYGO_REQUIRE_LIBMPV=1 go test -v ./...
+```
 
-To build self-contained LGPL-2.1+ libraries locally or in GitHub Actions:
-- macOS local script: `./scripts/build-libmpv-macos.sh arm64 dist/libmpv-darwin-arm64.dylib`
-- Windows local script (MSYS2 UCRT64): `./scripts/build-libmpv-windows.sh amd64 dist/mpv-2.dll`
-- GitHub Actions workflow: `.github/workflows/build-libmpv.yml` (builds `darwin-arm64`, `darwin-amd64`, and `windows-amd64`, verifies zero non-system dependencies via `otool -L` / `objdump -p`, runs zero-cgo Go integration tests, uploads SHA-256 assets to GitHub Release, and updates `mygo-plugin.json`).
+## Native Library Lookup & LGPL Builds
+
+`mygo-player` embeds `mygo-plugin.json` and resolves `libmpv` via `mygo/ffi` in this order:
+
+1. `player.SetLibraryPath(...)` or the `$MYGO_NATIVE_MPV` environment variable.
+2. Packaged app resources (`Contents/Resources/libmpv.dylib` / `Contents/Frameworks/` on macOS; `mpv-2.dll` next to the executable on Windows; `libmpv.so` next to or bundled with the executable on Linux).
+3. Local `.mygo/native/<goos>-<goarch>/` directory (unpackaged runs).
+4. Published SHA-256 verified binary declared in `mygo-plugin.json` (downloaded once into the user cache in unpackaged runs; bundled automatically by `mygo build`).
+5. Local development fallbacks when unpackaged (Homebrew `/opt/homebrew/lib/libmpv.dylib` or `/usr/local/lib/libmpv.dylib` on macOS; local directory `mpv-2.dll` on Windows; system `libmpv.so` / `libmpv.so.2` paths on Linux).
+
+To build self-contained LGPL-2.1+ libraries locally or via GitHub Actions:
+- **macOS:** `./scripts/build-libmpv-macos.sh arm64 dist/libmpv-darwin-arm64.dylib`
+- **Windows (MSYS2 UCRT64):** `./scripts/build-libmpv-windows.sh amd64 dist/mpv-2.dll`
+- **Linux:** `./scripts/build-libmpv-linux.sh amd64 dist/libmpv-linux-amd64.so`
+- **GitHub Actions:** `.github/workflows/build-libmpv.yml` builds `darwin-arm64`, `darwin-amd64`, `windows-amd64`, `linux-amd64`, and `linux-arm64` LGPL-2.1+ libraries, checks shared-library dependencies, runs zero-cgo Go integration tests, publishes SHA-256 assets to GitHub Releases, and updates `mygo-plugin.json`.
 
 ## License
 
-- Go plugin source code, examples, and scripts: **MIT License** ([LICENSE](LICENSE)).
-- Underlying `libmpv` dynamic library: **LGPL 2.1 or later** (compiled strictly without GPL/nonfree components). See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for full details and dynamic relinking instructions.
+- Go plugin source code, examples, and build scripts: **MIT License** ([LICENSE](LICENSE)).
+- Underlying `libmpv` shared library: **LGPL 2.1 or later** (compiled strictly without GPL or nonfree components). See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the complete list of third-party licenses and LGPL dynamic relinking instructions.

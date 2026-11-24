@@ -7,10 +7,10 @@ import (
 )
 
 // View renders p's video frame inside MyGo's native UI scene graph (zero-copy
-// Metal native.Texture on macOS; double-buffered ui.Bitmap on Windows). Because
-// frames are composited directly in MyGo rather than a native child window,
-// overlays such as danmaku, HUD controls, rounded corners, and popovers always
-// render cleanly on top.
+// Metal *native.Texture on macOS; double-buffered *ui.Bitmap on Windows and
+// Linux). Because frames are composited directly in MyGo rather than a native
+// child window, overlays such as danmaku, HUD controls, rounded corners, and
+// popovers always render cleanly on top.
 //
 // The returned ui.Element can be styled and laid out like any ui.Image
 // (Fill, Width, Height, Fit, Radius, Opacity, etc.). View automatically binds

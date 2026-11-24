@@ -7,7 +7,6 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/ebitengine/purego"
 	"github.com/egoist/mygo/ffi"
 )
 
@@ -337,7 +336,7 @@ var (
 
 func renderUpdateTrampoline() uintptr {
 	renderCBOnce.Do(func() {
-		renderCBAddr = purego.NewCallback(func(ctx uintptr) uintptr {
+		renderCBAddr = newRenderUpdateCallback(func(ctx uintptr) uintptr {
 			if v, ok := renderCBMap.Load(uint64(ctx)); ok {
 				if fn, ok := v.(func()); ok && fn != nil {
 					fn()

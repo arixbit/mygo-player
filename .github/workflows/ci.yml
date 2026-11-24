@@ -20,6 +20,7 @@ jobs:
         run: |
           bash -n scripts/build-libmpv-macos.sh
           bash -n scripts/build-libmpv-windows.sh
+          bash -n scripts/build-libmpv-linux.sh
 
       - name: Vet and build (zero cgo)
         env:
@@ -44,8 +45,39 @@ jobs:
           GOOS=darwin GOARCH=amd64 go build ./...
           GOOS=darwin GOARCH=arm64 go build ./...
           GOOS=linux GOARCH=amd64 go build ./...
+          GOOS=linux GOARCH=arm64 go build ./...
           GOOS=windows GOARCH=amd64 go build ./...
           GOOS=windows GOARCH=arm64 go build ./...
+          GOOS=js GOARCH=wasm go vet ./...
+          GOOS=js GOARCH=wasm go build ./...
+
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install libmpv and ffmpeg for integration tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libmpv-dev ffmpeg
+
+      - name: Vet and build (zero cgo)
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          go vet ./...
+          go build ./...
+
+      - name: Run unit & Linux integration tests (zero cgo)
+        env:
+          CGO_ENABLED: "0"
+          MYGO_REQUIRE_LIBMPV: "1"
+        run: go test -v ./...
 
   test-windows:
     runs-on: windows-latest

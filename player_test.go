@@ -101,7 +101,7 @@ func TestParseTrackList(t *testing.T) {
 
 func requireLibMPVAndFFmpeg(t *testing.T) string {
 	t.Helper()
-	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" && runtime.GOOS != "linux" {
 		t.Skipf("integration test not supported on %s", runtime.GOOS)
 	}
 	mustRun := os.Getenv("MYGO_REQUIRE_LIBMPV") == "1"
@@ -121,12 +121,12 @@ func requireLibMPVAndFFmpeg(t *testing.T) string {
 	return ffmpeg
 }
 
-// TestIntegrationMKVPlaybackAndM2 exercises the full stack on macOS and Windows
-// against a real libmpv library and a generated multi-track MKV under a Chinese
-// UTF-8 path:
+// TestIntegrationMKVPlaybackAndM2 exercises the full stack on macOS, Windows,
+// and Linux against a real libmpv library and a generated multi-track MKV under
+// a Chinese UTF-8 path:
 //   - libmpv FFI loading, Chinese-path MKV playback, frame rendering into MyGo
 //     (zero-copy IOSurface -> native.Texture on macOS; MPV_RENDER_API_TYPE_SW
-//     double-buffered -> ui.Bitmap on Windows), pixel color & upright
+//     double-buffered -> ui.Bitmap on Windows and Linux), pixel color & upright
 //     Y-orientation verification, overlay compositing above View(), dynamic
 //     resize while paused, and Seek/Pause/Play.
 //   - Multi-audio track switching, embedded + external Chinese-path SRT
@@ -185,7 +185,7 @@ func TestIntegrationMKVPlaybackAndM2(t *testing.T) {
 		runtime.GOOS, snap.VideoWidth, snap.VideoHeight, fw, fh, snap.Duration, p.FramesRendered(), snap.CurrentHWDec)
 
 	// Verify upright Y-orientation, RGB channels, and MyGo overlay compositing
-	// above View() (confirming no child HWND occlusion on Windows).
+	// above View() (confirming no native child window occlusion).
 	tt := ui.NewTester(func(c *ui.Context) {
 		ui.Box(c).Fill().Children(func() {
 			View(c, p).Fill()
@@ -216,12 +216,12 @@ func TestIntegrationMKVPlaybackAndM2(t *testing.T) {
 	t.Logf("MyGo ui.View rendered 320x240: top=(%d,%d,%d,%d) bottom=(%d,%d,%d,%d) overlay=(%d,%d,%d,%d)",
 		topC.R, topC.G, topC.B, topC.A, botC.R, botC.G, botC.B, botC.A, midC.R, midC.G, midC.B, midC.A)
 
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == "windows" || runtime.GOOS == "linux" {
 		if p.Texture() != nil {
-			t.Fatalf("expected nil Texture() on Windows, got %v", p.Texture())
+			t.Fatalf("expected nil Texture() on %s, got %v", runtime.GOOS, p.Texture())
 		}
 		if _, ok := p.ImageSource().(*ui.Bitmap); !ok {
-			t.Fatalf("expected *ui.Bitmap ImageSource() on Windows, got %T", p.ImageSource())
+			t.Fatalf("expected *ui.Bitmap ImageSource() on %s, got %T", runtime.GOOS, p.ImageSource())
 		}
 	}
 
@@ -253,14 +253,20 @@ func TestIntegrationMKVPlaybackAndM2(t *testing.T) {
 	if err := p.SetHWDec(HWDecNone); err != nil {
 		t.Fatalf("SetHWDec(no): %v", err)
 	}
-	if runtime.GOOS == "windows" {
+	switch runtime.GOOS {
+	case "windows":
 		if err := p.SetHWDec(HWDecD3D11VACopy); err != nil {
 			t.Fatalf("SetHWDec(d3d11va-copy): %v", err)
 		}
 		if err := p.SetHWDec(HWDecAutoCopy); err != nil {
 			t.Fatalf("SetHWDec(auto-copy): %v", err)
 		}
-	} else {
+	case "linux":
+		// Verify copy-back auto mode on Linux without requiring VA-API hardware on CI runners.
+		if err := p.SetHWDec(HWDecAutoCopy); err != nil {
+			t.Fatalf("SetHWDec(auto-copy): %v", err)
+		}
+	default:
 		if err := p.SetHWDec(HWDecAutoSafe); err != nil {
 			t.Fatalf("SetHWDec(auto-safe): %v", err)
 		}

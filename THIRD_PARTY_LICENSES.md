@@ -22,12 +22,19 @@ downstream applications can replace the `libmpv` shared library at any time
 without recompiling the Go application:
 
 - Set the `MYGO_NATIVE_MPV` environment variable to the path of a compatible
-  `libmpv` shared library (`libmpv.dylib` / `libmpv.2.dylib` on macOS; `mpv-2.dll` on Windows), or
-- Replace `Contents/Resources/libmpv.dylib` inside a packaged macOS `.app` bundle or `mpv-2.dll` next to the Windows application binary.
+  `libmpv` shared library (`libmpv.dylib` / `libmpv.2.dylib` on macOS;
+  `mpv-2.dll` on Windows; `libmpv.so` / `libmpv.so.2` on Linux), or
+- Replace the bundled shared library directly:
+  - **macOS:** `Contents/Resources/libmpv.dylib` inside a packaged `.app` bundle
+  - **Windows:** `mpv-2.dll` next to the application executable
+  - **Linux:** `libmpv.so` next to the application executable (or inside its bundled native library directory)
 
 ### Included Third-Party Libraries in Prebuilt `libmpv`
 
-When `scripts/build-libmpv-macos.sh` or `scripts/build-libmpv-windows.sh` builds a self-contained `libmpv.dylib` / `mpv-2.dll`, it statically links only LGPL-2.1+, MIT, BSD, ISC, FTL, or Zlib-compatible libraries:
+When `scripts/build-libmpv-macos.sh`, `scripts/build-libmpv-windows.sh`, or
+`scripts/build-libmpv-linux.sh` builds a self-contained `libmpv.dylib`,
+`mpv-2.dll`, or `libmpv.so`, it statically links only LGPL-2.1+, MIT, BSD, ISC,
+FTL, or Zlib-compatible libraries:
 
 - **mpv** — LGPL-2.1-or-later (when built with `-Dgpl=false`)
 - **FFmpeg** (`libavcodec`, `libavformat`, `libavutil`, `libavfilter`, `libswscale`, `libswresample`) — LGPL-2.1-or-later (built without `--enable-gpl`, `--enable-version3`, or `--enable-nonfree`)
@@ -39,9 +46,10 @@ When `scripts/build-libmpv-macos.sh` or `scripts/build-libmpv-windows.sh` builds
 - **Little CMS (lcms2)** — MIT
 - **dav1d** — BSD-2-Clause
 - **libunibreak** — Zlib
-- **libiconv** (Windows static build) — LGPL-2.1-or-later
-- **zlib** (Windows static build) — Zlib
+- **libiconv** (static builds where needed) — LGPL-2.1-or-later
+- **zlib** (static builds where needed) — Zlib
 
 Full corresponding source code versions and exact configure flags used to build
-each published `libmpv` release artifact are recorded in `scripts/build-libmpv-macos.sh`
-and `scripts/build-libmpv-windows.sh`, and attached to each GitHub Release.
+each published `libmpv` release artifact are recorded in
+`scripts/build-libmpv-macos.sh`, `scripts/build-libmpv-windows.sh`, and
+`scripts/build-libmpv-linux.sh`, and attached to each GitHub Release.

@@ -1,6 +1,7 @@
 package mpv
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,47 +9,47 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/ebitengine/purego"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ffi"
 )
 
 // libFuncs holds the dynamically bound C functions of libmpv.
 type libFuncs struct {
-	ClientAPIVersion func() uint64                                                              `ffi:"mpv_client_api_version"`
-	ErrorString      func(err int32) string                                                     `ffi:"mpv_error_string"`
-	Free             func(data unsafe.Pointer)                                                  `ffi:"mpv_free"`
-	Create           func() uintptr                                                             `ffi:"mpv_create"`
-	Initialize       func(ctx uintptr) int32                                                    `ffi:"mpv_initialize"`
-	TerminateDestroy func(ctx uintptr)                                                          `ffi:"mpv_terminate_destroy"`
-	SetOption        func(ctx uintptr, name string, format int32, data unsafe.Pointer) int32    `ffi:"mpv_set_option"`
-	SetOptionString  func(ctx uintptr, name string, data string) int32                          `ffi:"mpv_set_option_string"`
-	Command          func(ctx uintptr, args **byte) int32                                       `ffi:"mpv_command"`
-	CommandAsync     func(ctx uintptr, replyUserdata uint64, args **byte) int32                 `ffi:"mpv_command_async"`
-	CommandString    func(ctx uintptr, args string) int32                                       `ffi:"mpv_command_string"`
-	CommandNode      func(ctx uintptr, args *Node, result *Node) int32                          `ffi:"mpv_command_node"`
-	SetProperty      func(ctx uintptr, name string, format int32, data unsafe.Pointer) int32    `ffi:"mpv_set_property"`
-	SetPropertyStr   func(ctx uintptr, name string, data string) int32                          `ffi:"mpv_set_property_string"`
+	ClientAPIVersion func() uint64                                                                                 `ffi:"mpv_client_api_version"`
+	ErrorString      func(err int32) string                                                                        `ffi:"mpv_error_string"`
+	Free             func(data unsafe.Pointer)                                                                     `ffi:"mpv_free"`
+	Create           func() uintptr                                                                                `ffi:"mpv_create"`
+	Initialize       func(ctx uintptr) int32                                                                       `ffi:"mpv_initialize"`
+	TerminateDestroy func(ctx uintptr)                                                                             `ffi:"mpv_terminate_destroy"`
+	SetOption        func(ctx uintptr, name string, format int32, data unsafe.Pointer) int32                       `ffi:"mpv_set_option"`
+	SetOptionString  func(ctx uintptr, name string, data string) int32                                             `ffi:"mpv_set_option_string"`
+	Command          func(ctx uintptr, args **byte) int32                                                          `ffi:"mpv_command"`
+	CommandAsync     func(ctx uintptr, replyUserdata uint64, args **byte) int32                                    `ffi:"mpv_command_async"`
+	CommandString    func(ctx uintptr, args string) int32                                                          `ffi:"mpv_command_string"`
+	CommandNode      func(ctx uintptr, args *Node, result *Node) int32                                             `ffi:"mpv_command_node"`
+	SetProperty      func(ctx uintptr, name string, format int32, data unsafe.Pointer) int32                       `ffi:"mpv_set_property"`
+	SetPropertyStr   func(ctx uintptr, name string, data string) int32                                             `ffi:"mpv_set_property_string"`
 	SetPropertyAsync func(ctx uintptr, replyUserdata uint64, name string, format int32, data unsafe.Pointer) int32 `ffi:"mpv_set_property_async"`
-	GetProperty      func(ctx uintptr, name string, format int32, data unsafe.Pointer) int32    `ffi:"mpv_get_property"`
-	GetPropertyStr   func(ctx uintptr, name string) unsafe.Pointer                              `ffi:"mpv_get_property_string"`
-	FreeNodeContents func(node *Node)                                                           `ffi:"mpv_free_node_contents"`
-	ObserveProperty  func(ctx uintptr, replyUserdata uint64, name string, format int32) int32   `ffi:"mpv_observe_property"`
-	UnobserveProp    func(ctx uintptr, registeredReplyUserdata uint64) int32                    `ffi:"mpv_unobserve_property"`
-	RequestLogMsgs   func(ctx uintptr, minLevel string) int32                                   `ffi:"mpv_request_log_messages"`
-	WaitEvent        func(ctx uintptr, timeout float64) unsafe.Pointer                          `ffi:"mpv_wait_event"`
-	Wakeup           func(ctx uintptr)                                                          `ffi:"mpv_wakeup"`
+	GetProperty      func(ctx uintptr, name string, format int32, data unsafe.Pointer) int32                       `ffi:"mpv_get_property"`
+	GetPropertyStr   func(ctx uintptr, name string) unsafe.Pointer                                                 `ffi:"mpv_get_property_string"`
+	FreeNodeContents func(node *Node)                                                                              `ffi:"mpv_free_node_contents"`
+	ObserveProperty  func(ctx uintptr, replyUserdata uint64, name string, format int32) int32                      `ffi:"mpv_observe_property"`
+	UnobserveProp    func(ctx uintptr, registeredReplyUserdata uint64) int32                                       `ffi:"mpv_unobserve_property"`
+	RequestLogMsgs   func(ctx uintptr, minLevel string) int32                                                      `ffi:"mpv_request_log_messages"`
+	WaitEvent        func(ctx uintptr, timeout float64) unsafe.Pointer                                             `ffi:"mpv_wait_event"`
+	Wakeup           func(ctx uintptr)                                                                             `ffi:"mpv_wakeup"`
 
-	RenderContextCreate            func(res *uintptr, ctx uintptr, params *RenderParam) int32   `ffi:"mpv_render_context_create"`
-	RenderContextSetUpdateCallback func(rctx uintptr, callback uintptr, callbackCtx uintptr)    `ffi:"mpv_render_context_set_update_callback"`
-	RenderContextUpdate            func(rctx uintptr) uint64                                    `ffi:"mpv_render_context_update"`
-	RenderContextRender            func(rctx uintptr, params *RenderParam) int32                `ffi:"mpv_render_context_render"`
-	RenderContextReportSwap        func(rctx uintptr)                                           `ffi:"mpv_render_context_report_swap"`
-	RenderContextFree              func(rctx uintptr)                                           `ffi:"mpv_render_context_free"`
+	RenderContextCreate            func(res *uintptr, ctx uintptr, params *RenderParam) int32 `ffi:"mpv_render_context_create"`
+	RenderContextSetUpdateCallback func(rctx uintptr, callback uintptr, callbackCtx uintptr)  `ffi:"mpv_render_context_set_update_callback"`
+	RenderContextUpdate            func(rctx uintptr) uint64                                  `ffi:"mpv_render_context_update"`
+	RenderContextRender            func(rctx uintptr, params *RenderParam) int32              `ffi:"mpv_render_context_render"`
+	RenderContextReportSwap        func(rctx uintptr)                                         `ffi:"mpv_render_context_report_swap"`
+	RenderContextFree              func(rctx uintptr)                                         `ffi:"mpv_render_context_free"`
 }
 
 var (
 	loaderMu   sync.Mutex
+	envBindMu  sync.Mutex
 	manifest   []byte
 	packageDir string
 	customPath string
@@ -80,6 +81,9 @@ func SetLibraryPath(path string) {
 // .mygo/native, and mygo-plugin.json published builds), falling back to
 // standard local development paths in unpackaged runs.
 func LibraryPath() (string, error) {
+	if !platformSupported {
+		return "", fmt.Errorf("mpv: %s/%s: %w", runtime.GOOS, runtime.GOARCH, errors.ErrUnsupported)
+	}
 	loaderMu.Lock()
 	p := customPath
 	m := manifest
@@ -105,6 +109,10 @@ func LibraryPath() (string, error) {
 // Load loads libmpv and binds its C symbols once.
 func Load() error {
 	loadedOnce.Do(func() {
+		if !platformSupported {
+			loadedErr = fmt.Errorf("mpv: %s/%s: %w", runtime.GOOS, runtime.GOARCH, errors.ErrUnsupported)
+			return
+		}
 		loaderMu.Lock()
 		p := customPath
 		m := manifest
@@ -117,15 +125,18 @@ func Load() error {
 				loadedErr = err
 				return
 			}
+			if err := bindPathWithFFI(abs, &fns); err != nil {
+				loadedErr = err
+				return
+			}
 			loadedPath = abs
-			loadedErr = loadDirect(abs)
 			return
 		}
 
 		lib := newFFILib(m, dir)
 		if path, err := lib.Path(); err == nil {
 			if err := lib.Bind(&fns); err != nil {
-				loadedErr = err
+				loadedErr = fmt.Errorf("mpv: %w", err)
 				return
 			}
 			loadedPath = path
@@ -133,8 +144,11 @@ func Load() error {
 		} else {
 			if !mygo.App.IsPackaged() && os.Getenv(ffi.EnvVar("mpv")) == "" {
 				if sysPath := findDevSystemLib(dir); sysPath != "" {
+					if err := bindPathWithFFI(sysPath, &fns); err != nil {
+						loadedErr = err
+						return
+					}
 					loadedPath = sysPath
-					loadedErr = loadDirect(sysPath)
 					return
 				}
 			}
@@ -178,36 +192,12 @@ func defaultLibFileName() string {
 }
 
 func findDevSystemLib(pkgDir string) string {
-	var candidates []string
-	switch runtime.GOOS {
-	case "darwin":
-		candidates = []string{
-			"/opt/homebrew/lib/libmpv.dylib",
-			"/opt/homebrew/lib/libmpv.2.dylib",
-			"/usr/local/lib/libmpv.dylib",
-			"/usr/local/lib/libmpv.2.dylib",
-		}
-	case "windows":
-		names := []string{"mpv-2.dll", "libmpv-2.dll", "mpv.dll"}
-		var dirs []string
-		if exe, err := os.Executable(); err == nil {
-			dirs = append(dirs, filepath.Dir(exe))
-		}
-		if wd, err := os.Getwd(); err == nil {
-			dirs = append(dirs, wd, filepath.Join(wd, ".mygo", "native", runtime.GOOS+"-"+runtime.GOARCH))
-		}
-		if pkgDir != "" {
-			dirs = append(dirs, filepath.Join(pkgDir, ".mygo", "native", runtime.GOOS+"-"+runtime.GOARCH))
-		}
-		for _, d := range dirs {
-			for _, name := range names {
-				candidates = append(candidates, filepath.Join(d, name))
-			}
-		}
-	default:
-		return ""
+	exeDir := ""
+	if exe, err := os.Executable(); err == nil {
+		exeDir = filepath.Dir(exe)
 	}
-	for _, c := range candidates {
+	wd, _ := os.Getwd()
+	for _, c := range devSystemLibCandidates(runtime.GOOS, runtime.GOARCH, wd, exeDir, pkgDir) {
 		if info, err := os.Stat(c); err == nil && info.Mode().IsRegular() {
 			return c
 		}
@@ -215,64 +205,94 @@ func findDevSystemLib(pkgDir string) string {
 	return ""
 }
 
-func loadDirect(path string) error {
-	handle, err := dlopenLocal(path)
-	if err != nil {
-		return fmt.Errorf("mpv: dlopen %s: %w", path, err)
-	}
-	bindings := []struct {
-		ptr  any
-		name string
-	}{
-		{&fns.ClientAPIVersion, "mpv_client_api_version"},
-		{&fns.ErrorString, "mpv_error_string"},
-		{&fns.Free, "mpv_free"},
-		{&fns.Create, "mpv_create"},
-		{&fns.Initialize, "mpv_initialize"},
-		{&fns.TerminateDestroy, "mpv_terminate_destroy"},
-		{&fns.SetOption, "mpv_set_option"},
-		{&fns.SetOptionString, "mpv_set_option_string"},
-		{&fns.Command, "mpv_command"},
-		{&fns.CommandAsync, "mpv_command_async"},
-		{&fns.CommandString, "mpv_command_string"},
-		{&fns.CommandNode, "mpv_command_node"},
-		{&fns.SetProperty, "mpv_set_property"},
-		{&fns.SetPropertyStr, "mpv_set_property_string"},
-		{&fns.SetPropertyAsync, "mpv_set_property_async"},
-		{&fns.GetProperty, "mpv_get_property"},
-		{&fns.GetPropertyStr, "mpv_get_property_string"},
-		{&fns.FreeNodeContents, "mpv_free_node_contents"},
-		{&fns.ObserveProperty, "mpv_observe_property"},
-		{&fns.UnobserveProp, "mpv_unobserve_property"},
-		{&fns.RequestLogMsgs, "mpv_request_log_messages"},
-		{&fns.WaitEvent, "mpv_wait_event"},
-		{&fns.Wakeup, "mpv_wakeup"},
-		{&fns.RenderContextCreate, "mpv_render_context_create"},
-		{&fns.RenderContextSetUpdateCallback, "mpv_render_context_set_update_callback"},
-		{&fns.RenderContextUpdate, "mpv_render_context_update"},
-		{&fns.RenderContextRender, "mpv_render_context_render"},
-		{&fns.RenderContextReportSwap, "mpv_render_context_report_swap"},
-		{&fns.RenderContextFree, "mpv_render_context_free"},
-	}
-	for _, b := range bindings {
-		sym, err := dlsym(handle, b.name)
-		if err != nil {
-			return fmt.Errorf("mpv: %s missing symbol %s: %w", filepath.Base(path), b.name, err)
+func devSystemLibCandidates(goos, goarch, wd, exeDir, pkgDir string) []string {
+	var candidates []string
+	switch goos {
+	case "darwin":
+		candidates = []string{
+			"/opt/homebrew/lib/libmpv.dylib",
+			"/opt/homebrew/lib/libmpv.2.dylib",
+			"/usr/local/lib/libmpv.dylib",
+			"/usr/local/lib/libmpv.2.dylib",
 		}
-		if err := registerFuncSafe(b.ptr, sym, b.name); err != nil {
-			return err
+	case "linux":
+		target := goos + "-" + goarch
+		var localDirs []string
+		if wd != "" {
+			localDirs = append(localDirs, filepath.Join(wd, ".mygo", "native", target))
+		}
+		if pkgDir != "" && pkgDir != wd {
+			localDirs = append(localDirs, filepath.Join(pkgDir, ".mygo", "native", target))
+		}
+		for _, d := range localDirs {
+			candidates = append(candidates,
+				filepath.Join(d, "libmpv.so"),
+				filepath.Join(d, "libmpv.so.2"),
+			)
+		}
+		var sysDirs []string
+		switch goarch {
+		case "amd64":
+			sysDirs = append(sysDirs, "/usr/lib/x86_64-linux-gnu")
+		case "arm64":
+			sysDirs = append(sysDirs, "/usr/lib/aarch64-linux-gnu")
+		}
+		sysDirs = append(sysDirs, "/usr/lib64", "/usr/lib", "/usr/local/lib")
+		for _, d := range sysDirs {
+			candidates = append(candidates,
+				d+"/libmpv.so.2",
+				d+"/libmpv.so",
+			)
+		}
+	case "windows":
+		names := []string{"mpv-2.dll", "libmpv-2.dll", "mpv.dll"}
+		target := goos + "-" + goarch
+		var dirs []string
+		if exeDir != "" {
+			dirs = append(dirs, exeDir)
+		}
+		if wd != "" {
+			dirs = append(dirs, wd, filepath.Join(wd, ".mygo", "native", target))
+		}
+		if pkgDir != "" && pkgDir != wd {
+			dirs = append(dirs, filepath.Join(pkgDir, ".mygo", "native", target))
+		}
+		for _, d := range dirs {
+			for _, name := range names {
+				candidates = append(candidates, filepath.Join(d, name))
+			}
 		}
 	}
-	return nil
+	return candidates
 }
 
-func registerFuncSafe(fptr any, addr uintptr, name string) (err error) {
+func bindPathWithFFI(path string, target *libFuncs) error {
+	if !platformSupported {
+		return fmt.Errorf("mpv: %s/%s: %w", runtime.GOOS, runtime.GOARCH, errors.ErrUnsupported)
+	}
+	if path == "" {
+		return errors.New("mpv: empty library path")
+	}
+
+	envBindMu.Lock()
+	defer envBindMu.Unlock()
+
+	envKey := ffi.EnvVar("mpv")
+	prev, hadPrev := os.LookupEnv(envKey)
+	if err := os.Setenv(envKey, path); err != nil {
+		return fmt.Errorf("mpv: set %s: %w", envKey, err)
+	}
 	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("mpv: binding %s: %v", name, r)
+		if hadPrev {
+			_ = os.Setenv(envKey, prev)
+		} else {
+			_ = os.Unsetenv(envKey)
 		}
 	}()
-	purego.RegisterFunc(fptr, addr)
+
+	if err := ffi.New("mpv", nil).Bind(target); err != nil {
+		return fmt.Errorf("mpv: %w", err)
+	}
 	return nil
 }
 

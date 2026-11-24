@@ -18,6 +18,7 @@ on:
           - all
           - macos
           - windows
+          - linux
         default: "all"
       publish_release:
         description: "Upload built libraries to GitHub Release and update mygo-plugin.json"
@@ -157,8 +158,76 @@ jobs:
           path: dist/mpv-2.dll
           if-no-files-found: error
 
+  build-linux:
+    if: github.event_name == 'push' || inputs.targets == 'all' || inputs.targets == 'linux'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: amd64
+            arch: amd64
+            runner: ubuntu-24.04
+          - goarch: arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install build toolchain and Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            curl \
+            git \
+            tar \
+            xz-utils \
+            bzip2 \
+            meson \
+            ninja-build \
+            pkg-config \
+            nasm \
+            autoconf \
+            automake \
+            libtool \
+            python3-jinja2 \
+            libfontconfig1-dev \
+            libgnutls28-dev \
+            libasound2-dev \
+            libpulse-dev \
+            libva-dev \
+            ffmpeg
+
+      - name: Build self-contained LGPL 2.1+ libmpv.so
+        env:
+          MPV_VERSION: ${{ github.event.inputs.mpv_version || '0.40.0' }}
+        run: |
+          chmod +x scripts/build-libmpv-linux.sh
+          ./scripts/build-libmpv-linux.sh "${{ matrix.arch }}" "dist/libmpv-linux-${{ matrix.goarch }}.so"
+
+      - name: Verify libmpv.so with zero-cgo Go integration tests
+        env:
+          CGO_ENABLED: "0"
+          MYGO_REQUIRE_LIBMPV: "1"
+          MYGO_NATIVE_MPV: ${{ github.workspace }}/dist/libmpv-linux-${{ matrix.goarch }}.so
+        run: go test -v ./...
+
+      - name: Upload built shared library artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libmpv-linux-${{ matrix.goarch }}
+          path: dist/libmpv-linux-${{ matrix.goarch }}.so
+          if-no-files-found: error
+
   publish:
-    needs: [build-macos, build-windows]
+    needs: [build-macos, build-windows, build-linux]
     runs-on: ubuntu-latest
     if: >-
       always() &&
@@ -208,6 +277,12 @@ jobs:
           if [[ -f artifacts/mpv-2.dll ]]; then
             ARGS+=(-file "windows-amd64=artifacts/mpv-2.dll")
           fi
+          if [[ -f artifacts/libmpv-linux-amd64.so ]]; then
+            ARGS+=(-file "linux-amd64=artifacts/libmpv-linux-amd64.so")
+          fi
+          if [[ -f artifacts/libmpv-linux-arm64.so ]]; then
+            ARGS+=(-file "linux-arm64=artifacts/libmpv-linux-arm64.so")
+          fi
           go run ./scripts/update-manifest "${ARGS[@]}"
           cat mygo-plugin.json
 
@@ -220,7 +295,7 @@ jobs:
             gh release create "$TAG" \
               --repo "${{ github.repository }}" \
               --title "$TAG" \
-              --notes "Self-contained macOS & Windows LGPL-2.1-or-later libmpv dynamic libraries built by GitHub Actions for github.com/arixbit/mygo-player." \
+              --notes "Self-contained macOS, Windows & Linux LGPL-2.1-or-later libmpv dynamic libraries built by GitHub Actions for github.com/arixbit/mygo-player." \
               --latest=false
           fi
           gh release upload "$TAG" dist/release/* --repo "${{ github.repository }}" --clobber
