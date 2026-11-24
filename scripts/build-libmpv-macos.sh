@@ -128,10 +128,10 @@ ninja -C "$BUILD_DIR/dav1d" -j"$JOBS" install
 fetch_tar "https://github.com/mm2/Little-CMS/releases/download/lcms${LCMS2_VER}/lcms2-${LCMS2_VER}.tar.gz" "$SRC_DIR/lcms2"
 meson setup "$BUILD_DIR/lcms2" "$SRC_DIR/lcms2" \
   --prefix="$PREFIX" --libdir=lib --buildtype=release --default-library=static \
-  -Djpeg=disabled -Dtiff=disabled -Dutils=false -Dtests=false
+  -Djpeg=disabled -Dtiff=disabled -Dutils=false -Dtests=disabled
 ninja -C "$BUILD_DIR/lcms2" -j"$JOBS" install
 
-# 8. libplacebo (LGPL-2.1+) — clone with submodules (fast_float, glad)
+# 8. libplacebo (LGPL-2.1+) — clone with submodules (fast_float, glad, jinja, markupsafe)
 if [[ ! -d "$SRC_DIR/libplacebo" ]]; then
   git clone --depth 1 --branch "$LIBPLACEBO_VER" --recurse-submodules --shallow-submodules \
     https://code.videolan.org/videolan/libplacebo.git "$SRC_DIR/libplacebo"
@@ -140,7 +140,8 @@ meson setup "$BUILD_DIR/libplacebo" "$SRC_DIR/libplacebo" \
   --prefix="$PREFIX" --libdir=lib --buildtype=release --default-library=static \
   -Dopengl=enabled -Dvulkan=disabled -Dd3d11=disabled \
   -Dshaderc=disabled -Dglslang=disabled -Dlcms=enabled \
-  -Ddemos=false -Dtests=false -Dbench=false -Dfuzz=false -Dxxhash=disabled -Dlibdovi=disabled
+  -Ddemos=false -Dtests=false -Dbench=false -Dfuzz=false \
+  -Dunwind=disabled -Dxxhash=disabled -Dlibdovi=disabled
 ninja -C "$BUILD_DIR/libplacebo" -j"$JOBS" install
 
 # 9. FFmpeg (strictly LGPL-2.1+: NO --enable-gpl, NO --enable-version3, NO --enable-nonfree)
@@ -189,12 +190,15 @@ meson setup "$BUILD_DIR/mpv" "$SRC_DIR/mpv" \
   -Dtests=false \
   -Dgl=enabled \
   -Dgl-cocoa=enabled \
+  -Dplain-gl=enabled \
   -Dvideotoolbox-gl=enabled \
-  -Dvideotoolbox-pl=enabled \
+  -Dvideotoolbox-pl=disabled \
   -Dcoreaudio=enabled \
   -Dcocoa=enabled \
   -Diconv=enabled \
   -Dzlib=enabled \
+  -Dcplugins=disabled \
+  -Dlibavdevice=disabled \
   -Dswift-build=disabled \
   -Dmacos-cocoa-cb=disabled \
   -Dmacos-media-player=disabled \

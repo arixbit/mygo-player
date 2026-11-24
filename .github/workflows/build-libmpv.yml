@@ -46,7 +46,7 @@ jobs:
 
       - name: Install build toolchain
         run: |
-          brew install meson ninja pkg-config nasm autoconf automake libtool ffmpeg
+          brew install meson ninja pkg-config nasm autoconf automake libtool
           python3 -m pip install --user --break-system-packages jinja2
 
       - name: Build self-contained LGPL 2.1+ libmpv.dylib
@@ -56,6 +56,9 @@ jobs:
         run: |
           chmod +x scripts/build-libmpv-macos.sh
           ./scripts/build-libmpv-macos.sh "${{ matrix.arch }}" "dist/libmpv-darwin-${{ matrix.goarch }}.dylib"
+
+      - name: Install ffmpeg for Go integration test fixture
+        run: brew install ffmpeg
 
       - name: Verify libmpv.dylib with zero-cgo Go integration tests
         env:
