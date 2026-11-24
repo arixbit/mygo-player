@@ -144,7 +144,16 @@ func TestIntegrationMKVPlaybackAndM2(t *testing.T) {
 	tmp := t.TempDir()
 	mkvPath, extSubPath := generateTestMKV(t, ffmpeg, tmp)
 
+	// On headless macOS CI VMs lacking AppleM2ScalerParavirtDriver, VideoToolbox
+	// zero-copy intermittently fails with -12909; use software decoding initially
+	// on macOS CI for deterministic pixel checks while still testing SetHWDec below.
+	var initHWDec HWDecMode
+	if runtime.GOOS == "darwin" && os.Getenv("CI") != "" {
+		initHWDec = HWDecNone
+	}
+
 	p, err := New(Options{
+		HWDec:       initHWDec,
 		AudioOutput: "null",
 		LogLevel:    "warn",
 		OnLog: func(level, prefix, text string) {
