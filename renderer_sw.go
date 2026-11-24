@@ -21,7 +21,13 @@ const (
 var (
 	apiTypeSW = []byte("sw\x00")
 	swFmtNV12 = []byte("nv12\x00")
-	swFmtRGBA = []byte("rgba\x00")
+	// Use "rgb0" instead of "rgba": both share the exact [R,G,B,X] 4-byte pixel
+	// layout, but "rgba" has MP_IMGFLAG_ALPHA which causes mpv's sub/draw_bmp.c
+	// to require zimg for premul/unpremul when blending subtitles/OSD (failing
+	// with "Failed rendering OSD." on LGPL builds without zimg). "rgb0" takes
+	// mpv's fast 8-bit direct OSD/subtitle blending path, and we stamp alpha=255
+	// afterwards for MyGo's image.RGBA.
+	swFmtRGB0 = []byte("rgb0\x00")
 )
 
 type swFormatMode int32
@@ -448,7 +454,7 @@ func renderSWRGBA(rctx *mpv.RenderContext, buf *swFrameBuf, w, h int, blockForTa
 	}
 	params := []mpv.RenderParam{
 		{Type: mpv.RenderParamSWSize, Data: unsafe.Pointer(&size[0])},
-		{Type: mpv.RenderParamSWFormat, Data: unsafe.Pointer(&swFmtRGBA[0])},
+		{Type: mpv.RenderParamSWFormat, Data: unsafe.Pointer(&swFmtRGB0[0])},
 		{Type: mpv.RenderParamSWStride, Data: unsafe.Pointer(&stride)},
 		{Type: mpv.RenderParamSWPointer, Data: unsafe.Pointer(&rgba.Pix[0])},
 		{Type: mpv.RenderParamBlockForTargetTime, Data: unsafe.Pointer(&block)},
@@ -459,7 +465,16 @@ func renderSWRGBA(rctx *mpv.RenderContext, buf *swFrameBuf, w, h int, blockForTa
 	runtime.KeepAlive(&stride)
 	runtime.KeepAlive(&block)
 	runtime.KeepAlive(buf.raw)
+	if err == nil {
+		fillOpaqueAlpha(rgba.Pix)
+	}
 	return err
+}
+
+func fillOpaqueAlpha(pix []byte) {
+	for i := 3; i < len(pix); i += 4 {
+		pix[i] = 0xff
+	}
 }
 
 func clampRenderDim(v int) int {

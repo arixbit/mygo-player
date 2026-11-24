@@ -143,6 +143,7 @@ func TestIntegrationSWRendererRealLibmpv(t *testing.T) {
 		for _, kv := range [][2]string{
 			{"vo", "libmpv"},
 			{"vid", "auto"},
+			{"sid", "1"},
 			{"idle", "yes"},
 			{"config", "no"},
 			{"osd-level", "0"},
@@ -155,9 +156,48 @@ func TestIntegrationSWRendererRealLibmpv(t *testing.T) {
 				t.Fatalf("cycle %d: set option %s=%s: %v", cycle, kv[0], kv[1], err)
 			}
 		}
+		if err := client.RequestLogMessages("warn"); err != nil {
+			client.TerminateDestroy()
+			t.Fatalf("cycle %d: RequestLogMessages: %v", cycle, err)
+		}
 		if err := client.Initialize(); err != nil {
 			client.TerminateDestroy()
 			t.Fatalf("cycle %d: mpv.Initialize: %v", cycle, err)
+		}
+
+		// Drain mpv events in background to catch OSD/subtitle rendering warnings.
+		var osdFailed atomic.Bool
+		evStop := make(chan struct{})
+		evDone := make(chan struct{})
+		go func() {
+			defer close(evDone)
+			for {
+				select {
+				case <-evStop:
+					return
+				default:
+				}
+				ev := client.WaitEvent(0.05)
+				if ev == nil || ev.ID == mpv.EventNone {
+					continue
+				}
+				if ev.ID == mpv.EventShutdown {
+					return
+				}
+				if ev.ID == mpv.EventLogMessage && ev.Data != nil {
+					lm := (*mpv.LogMessageEvent)(ev.Data)
+					prefix, text := mpv.GoString(lm.Prefix), mpv.GoString(lm.Text)
+					t.Logf("cycle %d [mpv:%s:%s] %s", cycle, mpv.GoString(lm.Level), prefix, text)
+					if prefix == "osd" && contains(text, "Failed rendering OSD") {
+						osdFailed.Store(true)
+					}
+				}
+			}
+		}()
+		stopEvents := func() {
+			close(evStop)
+			client.Wakeup()
+			<-evDone
 		}
 
 		var frameNotifies atomic.Uint64
@@ -165,6 +205,7 @@ func TestIntegrationSWRendererRealLibmpv(t *testing.T) {
 			frameNotifies.Add(1)
 		})
 		if err != nil {
+			stopEvents()
 			client.TerminateDestroy()
 			t.Fatalf("cycle %d: newSWRenderer: %v", cycle, err)
 		}
@@ -172,6 +213,7 @@ func TestIntegrationSWRendererRealLibmpv(t *testing.T) {
 		r.SetViewportSize(320, 240)
 		if err := client.Command("loadfile", mkvPath, "replace"); err != nil {
 			r.Close()
+			stopEvents()
 			client.TerminateDestroy()
 			t.Fatalf("cycle %d: loadfile: %v", cycle, err)
 		}
@@ -186,18 +228,32 @@ func TestIntegrationSWRendererRealLibmpv(t *testing.T) {
 		t.Logf("cycle %d: swRenderer activeFormat=%s frames=%d",
 			cycle, swFormatMode(r.activeFormat.Load()), r.FramesRendered())
 
-		// Inspect raw SW buffer bytes before UI compositing to verify R,G,B,A directly.
+		// Inspect raw SW buffer bytes before UI compositing to verify R,G,B,A
+		// directly AND verify embedded SRT subtitles are actually blended onto
+		// the lower blue region (non-blue bright text pixels, no OSD warning).
+		var subPixels int
 		r.frameMu.Lock()
 		inspectIdx := r.readyIdx
 		if inspectIdx < 0 {
 			inspectIdx = r.displayedIdx
 		}
 		if inspectIdx >= 0 && r.bufs[inspectIdx].rgba != nil {
-			rawTop := r.bufs[inspectIdx].rgba.RGBAAt(160, 50)
-			rawBot := r.bufs[inspectIdx].rgba.RGBAAt(160, 190)
+			rgba := r.bufs[inspectIdx].rgba
+			rawTop := rgba.RGBAAt(160, 50)
+			rawBot := rgba.RGBAAt(160, 140)
 			t.Logf("cycle %d: raw SW RGBA top=%+v bot=%+v", cycle, rawTop, rawBot)
+			// Scan lower third where SRT subtitle renders over solid BLUE (0,0,255).
+			for y := 160; y < 240; y++ {
+				for x := 20; x < 300; x++ {
+					c := rgba.RGBAAt(x, y)
+					if c.R >= 180 && c.G >= 180 && c.B >= 180 && c.A == 255 {
+						subPixels++
+					}
+				}
+			}
 		}
 		r.frameMu.Unlock()
+		t.Logf("cycle %d: detected %d bright subtitle pixels in lower third", cycle, subPixels)
 
 		tt := ui.NewTester(func(c *ui.Context) {
 			ui.Image(c, r.ImageSource()).Fill().Fit(ui.Contain).Background(ui.RGB(0, 0, 0))
@@ -205,21 +261,36 @@ func TestIntegrationSWRendererRealLibmpv(t *testing.T) {
 		tt.Frame()
 		img := tt.Image()
 		topC := img.RGBAAt(160, 50)
-		botC := img.RGBAAt(160, 190)
+		botC := img.RGBAAt(160, 140)
 		if topC.R < 180 || topC.G > 60 || topC.B > 60 {
 			r.Close()
+			stopEvents()
 			client.TerminateDestroy()
 			t.Fatalf("cycle %d: SW renderer top expected RED, got %+v", cycle, topC)
 		}
 		if botC.B < 180 || botC.R > 60 || botC.G > 60 {
 			r.Close()
+			stopEvents()
 			client.TerminateDestroy()
 			t.Fatalf("cycle %d: SW renderer bottom expected BLUE, got %+v", cycle, botC)
+		}
+		if osdFailed.Load() {
+			r.Close()
+			stopEvents()
+			client.TerminateDestroy()
+			t.Fatalf("cycle %d: libmpv reported 'Failed rendering OSD' (subtitles failed to blend)", cycle)
+		}
+		if subPixels == 0 {
+			r.Close()
+			stopEvents()
+			client.TerminateDestroy()
+			t.Fatalf("cycle %d: expected embedded subtitle pixels blended in lower third, got 0", cycle)
 		}
 
 		// Pause and verify viewport resize re-renders cleanly into the new size.
 		if err := client.SetPropertyFlag("pause", true); err != nil {
 			r.Close()
+			stopEvents()
 			client.TerminateDestroy()
 			t.Fatalf("cycle %d: pause: %v", cycle, err)
 		}
@@ -230,6 +301,7 @@ func TestIntegrationSWRendererRealLibmpv(t *testing.T) {
 		})
 
 		r.Close()
+		stopEvents()
 		client.TerminateDestroy()
 	}
 }
