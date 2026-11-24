@@ -3,7 +3,19 @@
     {
       "name": "mpv",
       "source": "https://github.com/mpv-player/mpv/releases/tag/v0.40.0",
-      "release": "https://github.com/arixbit/mygo-player/releases/download/native-mpv"
+      "release": "https://github.com/arixbit/mygo-player/releases/download/native-mpv",
+      "files": {
+        "darwin-amd64": {
+          "name": "libmpv.dylib",
+          "url": "https://github.com/arixbit/mygo-player/releases/download/native-mpv/libmpv-darwin-amd64-c810f9abb676.dylib",
+          "sha256": "c810f9abb676b455cefce808e2f6c267e8e9ed8e3c5a517dfa9a74a0dd600adc"
+        },
+        "darwin-arm64": {
+          "name": "libmpv.dylib",
+          "url": "https://github.com/arixbit/mygo-player/releases/download/native-mpv/libmpv-darwin-arm64-2164cab56e4e.dylib",
+          "sha256": "2164cab56e4e69dd310ae7df36ab9983e9108d0aad23b2a2d36403058af415cf"
+        }
+      }
     }
   ]
 }
