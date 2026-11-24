@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -30,6 +31,7 @@ const (
 	glRGBA8                uint32 = 0x8058
 	glBGRA                 uint32 = 0x80E1
 	glUnsignedInt8888Rev   uint32 = 0x8367
+	glRenderer             uint32 = 0x1F01
 	glLinear               int32  = 0x2601
 	glClampToEdge          int32  = 0x812F
 	glTextureMagFilter     uint32 = 0x2800
@@ -78,6 +80,7 @@ var darwinGL struct {
 	glTexParameteri          func(target, pname uint32, param int32)
 	glFlush                  func()
 	glFinish                 func()
+	glGetString              func(name uint32) uintptr
 
 	cfNumberCreate     func(alloc uintptr, typ int64, val unsafe.Pointer) uintptr
 	cfDictionaryCreate func(alloc uintptr, keys, vals unsafe.Pointer, num int64, keyCB, valCB uintptr) uintptr
@@ -196,6 +199,7 @@ func initDarwinGL() error {
 			{&darwinGL.glTexParameteri, gl, "glTexParameteri"},
 			{&darwinGL.glFlush, gl, "glFlush"},
 			{&darwinGL.glFinish, gl, "glFinish"},
+			{&darwinGL.glGetString, gl, "glGetString"},
 			{&darwinGL.cfNumberCreate, cf, "CFNumberCreate"},
 			{&darwinGL.cfDictionaryCreate, cf, "CFDictionaryCreate"},
 			{&darwinGL.cfRetain, cf, "CFRetain"},
@@ -361,7 +365,7 @@ func (r *darwinRenderer) run(ready chan<- error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	cglCtx, err := createCGLContext()
+	cglCtx, accelerated, err := createCGLContext()
 	if err != nil {
 		ready <- err
 		return
@@ -374,6 +378,15 @@ func (r *darwinRenderer) run(ready chan<- error) {
 	if code := darwinGL.cglSetCurrentContext(cglCtx); code != 0 {
 		ready <- fmt.Errorf("player: CGLSetCurrentContext failed (%d)", code)
 		return
+	}
+
+	if !accelerated || isSoftwareGLRenderer() {
+		// Apple Software OpenGL Renderer (used on headless macOS VMs without a
+		// hardware GPU) miscompiles mpv's multi-pass LUT scaler shaders in its
+		// LLVM GLSL JIT, producing white/black frames. Single-pass dumb mode
+		// avoids the broken LUT FBO passes while keeping video + subtitle output
+		// intact through IOSurface / native.Texture.
+		_ = r.client.SetPropertyString("gpu-dumb-mode", "yes")
 	}
 
 	initParams := mpv.OpenGLInitParams{
@@ -517,42 +530,65 @@ func (r *darwinRenderer) run(ready chan<- error) {
 	}
 }
 
-func createCGLContext() (uintptr, error) {
-	tryAttribs := [][]int32{
+func createCGLContext() (uintptr, bool, error) {
+	type candidate struct {
+		attribs     []int32
+		accelerated bool
+	}
+	tryAttribs := []candidate{
 		{
-			kCGLPFAOpenGLProfile, kCGLOGLPVersion32Core,
-			kCGLPFAAccelerated,
-			kCGLPFANoRecovery,
-			kCGLPFAAllowOfflineRenderers,
-			0,
+			attribs: []int32{
+				kCGLPFAOpenGLProfile, kCGLOGLPVersion32Core,
+				kCGLPFAAccelerated,
+				kCGLPFANoRecovery,
+				kCGLPFAAllowOfflineRenderers,
+				0,
+			},
+			accelerated: true,
 		},
 		{
-			kCGLPFAOpenGLProfile, kCGLOGLPVersion32Core,
-			kCGLPFAAllowOfflineRenderers,
-			0,
+			attribs: []int32{
+				kCGLPFAOpenGLProfile, kCGLOGLPVersion32Core,
+				kCGLPFAAllowOfflineRenderers,
+				0,
+			},
+			accelerated: false,
 		},
 	}
-
 	var pix uintptr
 	var npix int32
 	var lastCode int32
-	for _, attribs := range tryAttribs {
-		lastCode = darwinGL.cglChoosePixelFormat(&attribs[0], &pix, &npix)
-		runtime.KeepAlive(attribs)
+	var accelerated bool
+	for _, c := range tryAttribs {
+		lastCode = darwinGL.cglChoosePixelFormat(&c.attribs[0], &pix, &npix)
+		runtime.KeepAlive(c.attribs)
 		if lastCode == 0 && pix != 0 {
+			accelerated = c.accelerated
 			break
 		}
 	}
 	if pix == 0 {
-		return 0, fmt.Errorf("player: CGLChoosePixelFormat failed (%d)", lastCode)
+		return 0, false, fmt.Errorf("player: CGLChoosePixelFormat failed (%d)", lastCode)
 	}
 	defer darwinGL.cglDestroyPixelFormat(pix)
 
 	var ctx uintptr
 	if code := darwinGL.cglCreateContext(pix, 0, &ctx); code != 0 || ctx == 0 {
-		return 0, fmt.Errorf("player: CGLCreateContext failed (%d)", code)
+		return 0, false, fmt.Errorf("player: CGLCreateContext failed (%d)", code)
 	}
-	return ctx, nil
+	return ctx, accelerated, nil
+}
+
+func isSoftwareGLRenderer() bool {
+	if darwinGL.glGetString == nil {
+		return false
+	}
+	ptr := darwinGL.glGetString(glRenderer)
+	if ptr == 0 {
+		return false
+	}
+	name := ffi.GoString(*(*unsafe.Pointer)(unsafe.Pointer(&ptr)))
+	return strings.Contains(strings.ToLower(name), "software")
 }
 
 func createIOSurfaceBGRA(w, h int) (uintptr, error) {
