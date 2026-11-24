@@ -223,7 +223,8 @@ meson setup "$BUILD_DIR/mpv" "$SRC_DIR/mpv" \
   -Dzlib=enabled \
   -Dcplugins=disabled \
   -Dlibavdevice=disabled \
-  -Dswift-build=disabled \
+  -Dswift-build=enabled \
+  -Dswift-flags="-target ${ARCH}-apple-macos${MACOS_MIN}" \
   -Dmacos-cocoa-cb=disabled \
   -Dmacos-media-player=disabled \
   -Dmacos-touchbar=disabled \
@@ -255,6 +256,12 @@ fi
 cp "$BUILT_DYLIB" "$OUT_DYLIB"
 chmod 755 "$OUT_DYLIB"
 install_name_tool -id "@rpath/libmpv.dylib" "$OUT_DYLIB"
+# Remove any build-host Xcode rpaths injected by mpv's Swift link step.
+while IFS= read -r rp; do
+  if [[ "$rp" == /Applications/* || "$rp" == /Library/Developer/* ]]; then
+    install_name_tool -delete_rpath "$rp" "$OUT_DYLIB"
+  fi
+done < <(otool -l "$OUT_DYLIB" | awk '/cmd LC_RPATH/{f=1} f && /path /{print $2; f=0}')
 strip -x "$OUT_DYLIB"
 codesign --force --sign - "$OUT_DYLIB"
 
