@@ -183,6 +183,15 @@ meson setup "$BUILD_DIR/libplacebo" "$SRC_DIR/libplacebo" \
   -Ddemos=false -Dtests=false -Dbench=false -Dfuzz=false \
   -Dunwind=disabled -Dxxhash=disabled -Dlibdovi=disabled
 ninja -C "$BUILD_DIR/libplacebo" -j"$JOBS" install
+# Ensure libplacebo.pc declares -lstdc++ in Libs.private so pkg-config-static
+# links libstdc++.a right after libplacebo.a (for fast_float / std::from_chars).
+if [[ -f "$PREFIX/lib/pkgconfig/libplacebo.pc" ]] && ! grep -q -- '-lstdc++' "$PREFIX/lib/pkgconfig/libplacebo.pc"; then
+  if grep -q '^Libs\.private:' "$PREFIX/lib/pkgconfig/libplacebo.pc"; then
+    sed -i 's/^Libs\.private:.*/& -lstdc++/' "$PREFIX/lib/pkgconfig/libplacebo.pc"
+  else
+    printf '\nLibs.private: -lstdc++\n' >> "$PREFIX/lib/pkgconfig/libplacebo.pc"
+  fi
+fi
 
 # 10. FFmpeg (strictly LGPL-2.1+: NO --enable-gpl, NO --enable-version3, NO --enable-nonfree)
 # GnuTLS is LGPL-2.1+ and enables HTTPS without GPLv3/nonfree; --enable-vaapi
@@ -233,7 +242,7 @@ for arg in "$@"; do
   case "$arg" in
     --libs|--libs-only-l|--libs-only-L|--libs-only-other)
       out="$(pkg-config --static "$@")" || exit $?
-      printf '%s\n' "$out" | sed -E 's/(^|[[:space:]])-lstdc\+\+([[:space:]]|$)/\1-Wl,-Bstatic,-lstdc++,-Bdynamic\2/g'
+      printf '%s\n' "$out" | sed -E 's/(^|[[:space:]])-lstdc\+\+([[:space:]]|$)/\1-Wl,-Bstatic,-lstdc++,-Bdynamic -lm\2/g'
       exit 0
       ;;
   esac
@@ -323,7 +332,7 @@ meson setup "$BUILD_DIR/mpv" "$SRC_DIR/mpv" \
   -Dhtml-build=disabled \
   -Dmanpage-build=disabled \
   -Dpdf-build=disabled \
-  -Dc_link_args="['-L${PREFIX}/lib','-static-libgcc','-static-libstdc++','-Wl,--as-needed','-Wl,--exclude-libs,ALL','-Wl,-soname,libmpv.so']"
+  -Dc_link_args="['-L${PREFIX}/lib','-static-libgcc','-static-libstdc++','-Wl,--as-needed','-Wl,-z,defs','-Wl,--exclude-libs,ALL','-Wl,-soname,libmpv.so']"
 ninja -C "$BUILD_DIR/mpv" -j"$JOBS" install
 
 BUILT_SO="$(find "$PREFIX/lib" -maxdepth 1 -name 'libmpv.so*' -type f | head -n 1)"
@@ -364,6 +373,14 @@ BAD_DEPS="$(grep -vE "$LINUX_SYS_LIB_RE" <<< "$NEEDED_LIBS" || true)"
 if [[ -n "$BAD_DEPS" ]]; then
   echo "ERROR: unexpected dynamic dependencies detected in $OUT_SO:" >&2
   echo "$BAD_DEPS" >&2
+  exit 1
+fi
+
+echo "==> Checking dynamic relocations via ldd -r (must have zero undefined symbols):"
+LDD_OUT="$(ldd -r "$OUT_SO" 2>&1 || true)"
+echo "$LDD_OUT"
+if grep -q 'undefined symbol:' <<< "$LDD_OUT"; then
+  echo "ERROR: undefined symbols detected in $OUT_SO" >&2
   exit 1
 fi
 
