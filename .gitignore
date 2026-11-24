@@ -1,0 +1,10 @@
+.mygo/
+.DS_Store
+build/
+dist/
+*.dylib
+*.so
+*.dll
+*.mkv
+*.mp4
+*.log

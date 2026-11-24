@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check build script syntax
+        run: bash -n scripts/build-libmpv-macos.sh
+
+      - name: Vet and build (zero cgo)
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          go vet ./...
+          go build ./...
+
+      - name: Run unit tests (zero cgo)
+        env:
+          CGO_ENABLED: "0"
+        run: go test -v ./...
+
+      - name: Verify cross-platform compilation (zero cgo)
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          GOOS=darwin GOARCH=amd64 go build ./...
+          GOOS=linux GOARCH=amd64 go build ./...
+          GOOS=windows GOARCH=amd64 go build ./...

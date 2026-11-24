@@ -1,0 +1,8 @@
+{
+  "libraries": [
+    {
+      "name": "mpv",
+      "release": "https://github.com/arixbit/mygo-player/releases/download/native-mpv"
+    }
+  ]
+}

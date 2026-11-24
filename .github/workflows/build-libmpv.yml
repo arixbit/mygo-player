@@ -1,0 +1,129 @@
+name: Build & Publish LGPL libmpv (macOS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mpv_version:
+        description: "Upstream mpv tag version without leading v (e.g. 0.40.0)"
+        required: true
+        default: "0.40.0"
+      release_tag:
+        description: "GitHub Release tag hosting the native library assets"
+        required: true
+        default: "native-mpv"
+      publish_release:
+        description: "Upload built dylibs to GitHub Release"
+        type: boolean
+        default: true
+  push:
+    tags:
+      - "libmpv-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: arm64
+            arch: arm64
+            runner: macos-14
+          - goarch: amd64
+            arch: x86_64
+            runner: macos-15-intel
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install build toolchain
+        run: |
+          brew install meson ninja pkg-config nasm autoconf automake libtool ffmpeg
+          python3 -m pip install --user --break-system-packages jinja2
+
+      - name: Build self-contained LGPL 2.1+ libmpv.dylib
+        env:
+          MPV_VERSION: ${{ github.event.inputs.mpv_version || '0.40.0' }}
+          MACOSX_DEPLOYMENT_TARGET: "12.0"
+        run: |
+          chmod +x scripts/build-libmpv-macos.sh
+          ./scripts/build-libmpv-macos.sh "${{ matrix.arch }}" "dist/libmpv-darwin-${{ matrix.goarch }}.dylib"
+
+      - name: Verify libmpv.dylib with zero-cgo Go integration tests
+        env:
+          CGO_ENABLED: "0"
+          MYGO_NATIVE_MPV: ${{ github.workspace }}/dist/libmpv-darwin-${{ matrix.goarch }}.dylib
+        run: go test -v ./...
+
+      - name: Upload built dylib artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libmpv-darwin-${{ matrix.goarch }}
+          path: dist/libmpv-darwin-${{ matrix.goarch }}.dylib
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || inputs.publish_release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Determine release tag
+        id: meta
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="${{ inputs.release_tag }}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "url=https://github.com/${{ github.repository }}/releases/download/${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare SHA-256 assets and update mygo-plugin.json
+        run: |
+          go run ./scripts/update-manifest \
+            -manifest mygo-plugin.json \
+            -release "${{ steps.meta.outputs.url }}" \
+            -out dist/release \
+            -file "darwin-arm64=artifacts/libmpv-darwin-arm64.dylib" \
+            -file "darwin-amd64=artifacts/libmpv-darwin-amd64.dylib"
+          cat mygo-plugin.json
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          if ! gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --repo "${{ github.repository }}" \
+              --title "$TAG" \
+              --notes "Self-contained macOS LGPL-2.1-or-later libmpv dynamic libraries built by GitHub Actions for github.com/arixbit/mygo-player." \
+              --latest=false
+          fi
+          gh release upload "$TAG" dist/release/* --repo "${{ github.repository }}" --clobber
+
+      - name: Upload updated mygo-plugin.json artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mygo-plugin-manifest
+          path: mygo-plugin.json
