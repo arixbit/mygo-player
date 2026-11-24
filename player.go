@@ -111,11 +111,9 @@ func New(opts ...Options) (*Player, error) {
 		{"vid", "auto"},
 		{"idle", "yes"},
 		{"config", "no"},
-		{"osc", "no"},
 		{"osd-level", "0"},
 		{"input-default-bindings", "no"},
 		{"input-vo-keyboard", "no"},
-		{"ytdl", "no"},
 		{"sub-auto", "fuzzy"},
 		{"hwdec", string(hwdec)},
 		{"volume", strconv.FormatFloat(vol, 'f', 2, 64)},
@@ -137,6 +135,17 @@ func New(opts ...Options) (*Player, error) {
 	for _, kv := range baseOpts {
 		if err := client.SetOptionString(kv[0], kv[1]); err != nil {
 			return nil, fmt.Errorf("player: set option %s=%s: %w", kv[0], kv[1], err)
+		}
+	}
+
+	// Best-effort disable built-in Lua script options when libmpv is built with
+	// Lua enabled; minimal Lua-less libmpv builds return ErrOptionNotFound.
+	for _, kv := range [][2]string{{"osc", "no"}, {"ytdl", "no"}} {
+		if err := client.SetOptionString(kv[0], kv[1]); err != nil {
+			var mpvErr *mpv.Error
+			if !errors.As(err, &mpvErr) || mpvErr.Code != mpv.ErrOptionNotFound {
+				return nil, fmt.Errorf("player: set option %s=%s: %w", kv[0], kv[1], err)
+			}
 		}
 	}
 
