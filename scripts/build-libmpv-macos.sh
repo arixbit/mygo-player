@@ -282,8 +282,9 @@ if [[ -n "$BAD_DEPS" ]]; then
 fi
 
 echo "==> Verifying exported libmpv symbols:"
+EXPORTS="$(nm -gU "$OUT_DYLIB")"
 for sym in _mpv_create _mpv_initialize _mpv_command _mpv_render_context_create _mpv_render_context_render _mpv_terminate_destroy; do
-  if ! nm -gU "$OUT_DYLIB" | grep -q " T ${sym}$"; then
+  if ! grep -q " T ${sym}$" <<< "$EXPORTS"; then
     echo "ERROR: missing required exported symbol ${sym}" >&2
     exit 1
   fi
