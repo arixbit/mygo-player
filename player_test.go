@@ -396,13 +396,22 @@ func TestIntegrationLifecycleOpenClose(t *testing.T) {
 	const cycles = 4
 	for i := range cycles {
 		p, err := New(Options{
+			// Use software decoding in repeated lifecycle stress cycles so
+			// headless CI VMs with limited/paravirtualized hardware decoder
+			// sessions (e.g. macOS CI VideoToolbox -12909) do not flake.
+			// Hardware decoding is exercised by TestIntegrationMKVPlaybackAndM2.
+			HWDec:       HWDecNone,
 			AudioOutput: "null",
+			LogLevel:    "warn",
+			OnLog: func(level, prefix, text string) {
+				t.Logf("[cycle %d mpv:%s:%s] %s", i, level, prefix, text)
+			},
 		})
 		if err != nil {
 			t.Fatalf("cycle %d: New: %v", i, err)
 		}
+		t.Cleanup(func() { _ = p.Close() })
 		if err := p.Open(mkvPath); err != nil {
-			_ = p.Close()
 			t.Fatalf("cycle %d: Open: %v", i, err)
 		}
 		waitFor(t, 8*time.Second, fmt.Sprintf("cycle %d first frame", i), func() bool {

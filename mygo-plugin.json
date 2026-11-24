@@ -14,6 +14,11 @@
           "name": "libmpv.dylib",
           "url": "https://github.com/arixbit/mygo-player/releases/download/native-mpv/libmpv-darwin-arm64-2164cab56e4e.dylib",
           "sha256": "2164cab56e4e69dd310ae7df36ab9983e9108d0aad23b2a2d36403058af415cf"
+        },
+        "windows-amd64": {
+          "name": "mpv-2.dll",
+          "url": "https://github.com/arixbit/mygo-player/releases/download/native-mpv/mpv-2-windows-amd64-fc039cbee47a.dll",
+          "sha256": "fc039cbee47aa81e3ddde0188e56ae6e2b1218c7c9394395ea9d950776e7c12b"
         }
       }
     }
