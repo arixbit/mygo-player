@@ -64,8 +64,10 @@ export CFLAGS="-O2 -I$PREFIX_WIN/include"
 export CXXFLAGS="$CFLAGS"
 export LDFLAGS="-L$PREFIX_WIN/lib"
 # Strictly isolate pkg-config from /ucrt64/lib/pkgconfig so no MSYS2 dynamic
-# library (.dll.a) dependencies leak into mpv-2.dll.
-export PKG_CONFIG_LIBDIR="$PREFIX_WIN/lib/pkgconfig"
+# library (.dll.a) dependencies leak into mpv-2.dll. Use a POSIX path here
+# because MSYS2 treats PKG_CONFIG_LIBDIR as a colon-delimited path list and
+# translates it to Windows paths automatically for native Win32 pkgconf/meson.
+export PKG_CONFIG_LIBDIR="$PREFIX_POSIX/lib/pkgconfig"
 export PKG_CONFIG_PATH=""
 
 echo "==> Building strictly LGPL 2.1+ self-contained mpv-2.dll ($MPV_VER) for windows/$ARCH"
@@ -78,8 +80,11 @@ fetch_tar() {
   local dest="$2"
   if [[ ! -d "$dest" ]]; then
     mkdir -p "$dest"
+    local archive="$WORK_DIR_POSIX/$(basename "$url")"
     echo "==> Downloading $url"
-    curl -fL --retry 3 --retry-delay 2 "$url" | tar -x --strip-components=1 -C "$dest"
+    curl -fL --retry 3 --retry-delay 2 -o "$archive" "$url"
+    tar -xf "$archive" --strip-components=1 -C "$dest"
+    rm -f "$archive"
   fi
 }
 
@@ -112,6 +117,7 @@ Libs: -L\${libdir} -lz
 Cflags: -I\${includedir}
 EOF
 )
+pkg-config --cflags --libs zlib
 
 # 2. libiconv (LGPL-2.1+) — static libiconv.a without libintl/NLS
 fetch_tar "https://ftp.gnu.org/pub/gnu/libiconv/libiconv-${LIBICONV_VER}.tar.gz" "$SRC_DIR/libiconv"
@@ -275,8 +281,8 @@ meson setup "$BUILD_DIR_WIN/mpv" "$(cygpath -m "$SRC_DIR/mpv")" \
   -Dhtml-build=disabled \
   -Dmanpage-build=disabled \
   -Dpdf-build=disabled \
-  -Dc_link_args="['-static','-static-libgcc','-static-libstdc++','-Wl,-Bstatic','-lstdc++','-lwinpthread','-Wl,-Bdynamic','-Wl,--exclude-libs,ALL']" \
-  -Dcpp_link_args="['-static','-static-libgcc','-static-libstdc++','-Wl,-Bstatic','-lstdc++','-lwinpthread','-Wl,-Bdynamic','-Wl,--exclude-libs,ALL']"
+  -Dc_link_args="['-L${PREFIX_WIN}/lib','-static','-static-libgcc','-static-libstdc++','-Wl,-Bstatic','-lstdc++','-lwinpthread','-Wl,-Bdynamic','-Wl,--exclude-libs,ALL']" \
+  -Dcpp_link_args="['-L${PREFIX_WIN}/lib','-static','-static-libgcc','-static-libstdc++','-Wl,-Bstatic','-lstdc++','-lwinpthread','-Wl,-Bdynamic','-Wl,--exclude-libs,ALL']"
 ninja -C "$BUILD_DIR_WIN/mpv" -j"$JOBS" install
 
 BUILT_DLL="$(find "$PREFIX_POSIX/bin" "$PREFIX_POSIX/lib" -maxdepth 1 -name '*mpv*.dll' -type f 2>/dev/null | head -n 1)"

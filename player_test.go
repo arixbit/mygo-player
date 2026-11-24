@@ -184,26 +184,28 @@ func TestIntegrationMKVPlaybackAndM2(t *testing.T) {
 			ui.Box(c).Absolute().Left(150).Top(110).Width(20).Height(20).Background(ui.RGB(0, 255, 0))
 		})
 	}, 320, 240)
-	tt.Frame()
+	// Poll briefly so async GPU flushes (e.g. paravirtualized macOS CI VMs) and
+	// initial hardware-decoder fallback settle before asserting exact pixels.
+	waitFor(t, 5*time.Second, "rendered RED/BLUE/overlay pixels via View()", func() bool {
+		tt.Frame()
+		img := tt.Image()
+		if img == nil || img.Bounds().Dx() != 320 || img.Bounds().Dy() != 240 {
+			return false
+		}
+		topC := img.RGBAAt(160, 50)
+		botC := img.RGBAAt(160, 190)
+		midC := img.RGBAAt(160, 120)
+		return topC.R >= 180 && topC.G <= 60 && topC.B <= 60 &&
+			botC.B >= 180 && botC.R <= 60 && botC.G <= 60 &&
+			midC.G >= 200 && midC.R <= 40 && midC.B <= 40
+	})
 	rendered := tt.Image()
-	if rendered == nil || rendered.Bounds().Dx() != 320 || rendered.Bounds().Dy() != 240 {
-		t.Fatalf("unexpected ui.Tester rendered image: %v", rendered)
-	}
 	// Fixture has top half RED (#FF0000) and bottom half BLUE (#0000FF).
 	topC := rendered.RGBAAt(160, 50)
 	botC := rendered.RGBAAt(160, 190)
 	midC := rendered.RGBAAt(160, 120)
 	t.Logf("MyGo ui.View rendered 320x240: top=(%d,%d,%d,%d) bottom=(%d,%d,%d,%d) overlay=(%d,%d,%d,%d)",
 		topC.R, topC.G, topC.B, topC.A, botC.R, botC.G, botC.B, botC.A, midC.R, midC.G, midC.B, midC.A)
-	if topC.R < 180 || topC.G > 60 || topC.B > 60 {
-		t.Fatalf("expected top half RED via View(), got RGBA=%+v", topC)
-	}
-	if botC.B < 180 || botC.R > 60 || botC.G > 60 {
-		t.Fatalf("expected bottom half BLUE via View(), got RGBA=%+v", botC)
-	}
-	if midC.G < 200 || midC.R > 40 || midC.B > 40 {
-		t.Fatalf("expected centered green overlay above View(), got RGBA=%+v", midC)
-	}
 
 	if runtime.GOOS == "windows" {
 		if p.Texture() != nil {
@@ -410,12 +412,11 @@ func TestIntegrationLifecycleOpenClose(t *testing.T) {
 		tt := ui.NewTester(func(c *ui.Context) {
 			View(c, p).Fill()
 		}, 160, 120)
-		tt.Frame()
-		topC := tt.Image().RGBAAt(80, 30)
-		if topC.R < 180 || topC.B > 60 {
-			_ = p.Close()
-			t.Fatalf("cycle %d: expected top RED pixel, got %+v", i, topC)
-		}
+		waitFor(t, 5*time.Second, fmt.Sprintf("cycle %d top RED pixel", i), func() bool {
+			tt.Frame()
+			topC := tt.Image().RGBAAt(80, 30)
+			return topC.R >= 180 && topC.G <= 60 && topC.B <= 60
+		})
 
 		if err := p.Close(); err != nil {
 			t.Fatalf("cycle %d: Close: %v", i, err)
