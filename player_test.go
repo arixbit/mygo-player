@@ -1,6 +1,7 @@
 package player
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -98,37 +99,52 @@ func TestParseTrackList(t *testing.T) {
 	}
 }
 
-// TestIntegrationMKVZeroCopyAndM2 exercises the full macOS stack against a real
-// libmpv shared library and a generated multi-track MKV:
-//   - M1: libmpv FFI loading, MKV playback, zero-copy IOSurface -> native.Texture
-//     rendering, pixel color & upright Y-orientation verification, MyGo ui.View
-//     rendering via ui.NewTester, dynamic resize while paused, Seek/Pause/Play.
-//   - M2: Multi-audio track switching, embedded + external SRT subtitle loading
-//     and switching, hardware decoding (VideoToolbox), and custom HTTP headers
-//     (plus isolation across Open calls) verified against a local httptest.Server.
-func TestIntegrationMKVZeroCopyAndM2(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("macOS integration test")
+func requireLibMPVAndFFmpeg(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skipf("integration test not supported on %s", runtime.GOOS)
 	}
+	mustRun := os.Getenv("MYGO_REQUIRE_LIBMPV") == "1"
 	if err := Load(); err != nil {
+		if mustRun {
+			t.Fatalf("libmpv required (MYGO_REQUIRE_LIBMPV=1) but failed to load: %v", err)
+		}
 		t.Skipf("libmpv not available in this environment: %v", err)
 	}
 	ffmpeg, err := exec.LookPath("ffmpeg")
 	if err != nil {
+		if mustRun {
+			t.Fatalf("ffmpeg required (MYGO_REQUIRE_LIBMPV=1) but not found in PATH: %v", err)
+		}
 		t.Skip("ffmpeg not available to synthesize MKV fixture")
 	}
+	return ffmpeg
+}
+
+// TestIntegrationMKVPlaybackAndM2 exercises the full stack on macOS and Windows
+// against a real libmpv library and a generated multi-track MKV under a Chinese
+// UTF-8 path:
+//   - libmpv FFI loading, Chinese-path MKV playback, frame rendering into MyGo
+//     (zero-copy IOSurface -> native.Texture on macOS; MPV_RENDER_API_TYPE_SW
+//     double-buffered -> ui.Bitmap on Windows), pixel color & upright
+//     Y-orientation verification, overlay compositing above View(), dynamic
+//     resize while paused, and Seek/Pause/Play.
+//   - Multi-audio track switching, embedded + external Chinese-path SRT
+//     subtitle loading and switching, hardware decoding options, and custom
+//     HTTP headers (plus isolation across Open calls) via httptest.Server.
+func TestIntegrationMKVPlaybackAndM2(t *testing.T) {
+	ffmpeg := requireLibMPVAndFFmpeg(t)
 
 	major, minor, err := ClientAPIVersion()
 	if err != nil {
 		t.Fatalf("ClientAPIVersion: %v", err)
 	}
-	t.Logf("loaded libmpv client API v%d.%d from %s", major, minor, mustLibPath(t))
+	t.Logf("loaded libmpv client API v%d.%d from %s (%s/%s)", major, minor, mustLibPath(t), runtime.GOOS, runtime.GOARCH)
 
 	tmp := t.TempDir()
 	mkvPath, extSubPath := generateTestMKV(t, ffmpeg, tmp)
 
 	p, err := New(Options{
-		HWDec:       HWDecAutoSafe,
 		AudioOutput: "null",
 		LogLevel:    "warn",
 		OnLog: func(level, prefix, text string) {
@@ -148,20 +164,25 @@ func TestIntegrationMKVZeroCopyAndM2(t *testing.T) {
 		t.Fatalf("player.Open(mkv): %v", err)
 	}
 
-	// Wait until video renders at least one zero-copy frame into native.Texture.
-	waitFor(t, 8*time.Second, "first zero-copy GPU frame", func() bool {
-		w, h := p.Texture().Size()
+	// Wait until video renders at least one frame.
+	waitFor(t, 10*time.Second, "first rendered video frame", func() bool {
+		w, h := p.FrameSize()
 		return p.FramesRendered() > 0 && w > 0 && h > 0 && p.Snapshot().Duration > 0
 	})
 
 	snap := p.Snapshot()
-	t.Logf("M1 MKV playing: %dx%d duration=%v frames=%d hwdec=%q",
-		snap.VideoWidth, snap.VideoHeight, snap.Duration, p.FramesRendered(), snap.CurrentHWDec)
+	fw, fh := p.FrameSize()
+	t.Logf("MKV playing (%s): video=%dx%d frame=%dx%d duration=%v frames=%d hwdec=%q",
+		runtime.GOOS, snap.VideoWidth, snap.VideoHeight, fw, fh, snap.Duration, p.FramesRendered(), snap.CurrentHWDec)
 
-	// Verify upright Y-orientation and RGB color channels directly from the
-	// presented IOSurface through native.Texture.Frame AND MyGo UI widget View().
+	// Verify upright Y-orientation, RGB channels, and MyGo overlay compositing
+	// above View() (confirming no child HWND occlusion on Windows).
 	tt := ui.NewTester(func(c *ui.Context) {
-		View(c, p).Fill()
+		ui.Box(c).Fill().Children(func() {
+			View(c, p).Fill()
+			// Centered green overlay box must composite on top of the video.
+			ui.Box(c).Absolute().Left(150).Top(110).Width(20).Height(20).Background(ui.RGB(0, 255, 0))
+		})
 	}, 320, 240)
 	tt.Frame()
 	rendered := tt.Image()
@@ -169,76 +190,98 @@ func TestIntegrationMKVZeroCopyAndM2(t *testing.T) {
 		t.Fatalf("unexpected ui.Tester rendered image: %v", rendered)
 	}
 	// Fixture has top half RED (#FF0000) and bottom half BLUE (#0000FF).
-	topC := rendered.RGBAAt(160, 60)
-	botC := rendered.RGBAAt(160, 180)
-	t.Logf("MyGo ui.View rendered 320x240: top=(%d,%d,%d,%d) bottom=(%d,%d,%d,%d)",
-		topC.R, topC.G, topC.B, topC.A, botC.R, botC.G, botC.B, botC.A)
+	topC := rendered.RGBAAt(160, 50)
+	botC := rendered.RGBAAt(160, 190)
+	midC := rendered.RGBAAt(160, 120)
+	t.Logf("MyGo ui.View rendered 320x240: top=(%d,%d,%d,%d) bottom=(%d,%d,%d,%d) overlay=(%d,%d,%d,%d)",
+		topC.R, topC.G, topC.B, topC.A, botC.R, botC.G, botC.B, botC.A, midC.R, midC.G, midC.B, midC.A)
 	if topC.R < 180 || topC.G > 60 || topC.B > 60 {
 		t.Fatalf("expected top half RED via View(), got RGBA=%+v", topC)
 	}
 	if botC.B < 180 || botC.R > 60 || botC.G > 60 {
 		t.Fatalf("expected bottom half BLUE via View(), got RGBA=%+v", botC)
 	}
+	if midC.G < 200 || midC.R > 40 || midC.B > 40 {
+		t.Fatalf("expected centered green overlay above View(), got RGBA=%+v", midC)
+	}
+
+	if runtime.GOOS == "windows" {
+		if p.Texture() != nil {
+			t.Fatalf("expected nil Texture() on Windows, got %v", p.Texture())
+		}
+		if _, ok := p.ImageSource().(*ui.Bitmap); !ok {
+			t.Fatalf("expected *ui.Bitmap ImageSource() on Windows, got %T", p.ImageSource())
+		}
+	}
 
 	// Verify Pause, dynamic SetRenderSize while paused, and Seek.
 	if err := p.Pause(); err != nil {
 		t.Fatalf("Pause: %v", err)
 	}
-	waitFor(t, 3*time.Second, "paused state", func() bool { return p.Snapshot().Paused })
+	waitFor(t, 4*time.Second, "paused state", func() bool { return p.Snapshot().Paused })
 
 	p.SetRenderSize(640, 480)
-	waitFor(t, 3*time.Second, "resized IOSurface 640x480 while paused", func() bool {
-		w, h := p.Texture().Size()
-		return int(w) == 640 && int(h) == 480
+	waitFor(t, 4*time.Second, "resized frame 640x480 while paused", func() bool {
+		w, h := p.FrameSize()
+		return w == 640 && h == 480
 	})
 
 	if err := p.Seek(1 * time.Second); err != nil {
 		t.Fatalf("Seek: %v", err)
 	}
-	waitFor(t, 3*time.Second, "seek position >= 0.8s", func() bool {
+	waitFor(t, 4*time.Second, "seek position >= 0.8s", func() bool {
 		return p.Snapshot().Position >= 800*time.Millisecond
 	})
 
-	// M2: Verify hardware decoding (VideoToolbox) on macOS.
+	// Verify hardware decoding mode switching.
 	if hw := p.CurrentHWDec(); hw != "" && hw != "no" {
-		t.Logf("M2 hardware decoding active: %s", hw)
+		t.Logf("hardware decoding active: %s", hw)
 	} else {
-		t.Logf("M2 note: hwdec-current=%q (may occur on headless VM without VideoToolbox)", hw)
+		t.Logf("note: hwdec-current=%q (expected on headless VM without GPU decoder)", hw)
 	}
 	if err := p.SetHWDec(HWDecNone); err != nil {
 		t.Fatalf("SetHWDec(no): %v", err)
 	}
-	if err := p.SetHWDec(HWDecAutoSafe); err != nil {
-		t.Fatalf("SetHWDec(auto-safe): %v", err)
+	if runtime.GOOS == "windows" {
+		if err := p.SetHWDec(HWDecD3D11VACopy); err != nil {
+			t.Fatalf("SetHWDec(d3d11va-copy): %v", err)
+		}
+		if err := p.SetHWDec(HWDecAutoCopy); err != nil {
+			t.Fatalf("SetHWDec(auto-copy): %v", err)
+		}
+	} else {
+		if err := p.SetHWDec(HWDecAutoSafe); err != nil {
+			t.Fatalf("SetHWDec(auto-safe): %v", err)
+		}
 	}
 
-	// M2: Verify multi-audio track detection & switching.
-	waitFor(t, 3*time.Second, "2 audio tracks detected", func() bool {
+	// Verify multi-audio track detection & switching.
+	waitFor(t, 4*time.Second, "2 audio tracks detected", func() bool {
 		return len(p.AudioTracks()) == 2
 	})
 	audios := p.AudioTracks()
-	t.Logf("M2 audio tracks: %+v", audios)
+	t.Logf("audio tracks: %+v", audios)
 	if err := p.SelectAudioTrack(audios[1].ID); err != nil {
 		t.Fatalf("SelectAudioTrack(%d): %v", audios[1].ID, err)
 	}
-	waitFor(t, 3*time.Second, "audio track 2 selected", func() bool {
+	waitFor(t, 4*time.Second, "audio track 2 selected", func() bool {
 		return p.Snapshot().AudioTrackID == audios[1].ID
 	})
 	if err := p.DisableAudioTrack(); err != nil {
 		t.Fatalf("DisableAudioTrack: %v", err)
 	}
-	waitFor(t, 3*time.Second, "audio disabled", func() bool {
+	waitFor(t, 4*time.Second, "audio disabled", func() bool {
 		return p.Snapshot().AudioTrackID == 0
 	})
 
-	// M2: Verify embedded subtitle + adding & switching external SRT subtitle + visibility toggle.
-	waitFor(t, 3*time.Second, "embedded subtitle track detected", func() bool {
+	// Verify embedded subtitle + adding & switching external Chinese-path SRT subtitle + visibility toggle.
+	waitFor(t, 4*time.Second, "embedded subtitle track detected", func() bool {
 		return len(p.SubtitleTracks()) >= 1
 	})
 	if err := p.AddSubtitleFile(extSubPath, SubtitleSelect); err != nil {
-		t.Fatalf("AddSubtitleFile: %v", err)
+		t.Fatalf("AddSubtitleFile(%s): %v", extSubPath, err)
 	}
-	waitFor(t, 3*time.Second, "external subtitle added and selected", func() bool {
+	waitFor(t, 4*time.Second, "external subtitle added and selected", func() bool {
 		for _, tr := range p.SubtitleTracks() {
 			if tr.External && tr.Selected {
 				return true
@@ -247,31 +290,31 @@ func TestIntegrationMKVZeroCopyAndM2(t *testing.T) {
 		return false
 	})
 	subs := p.SubtitleTracks()
-	t.Logf("M2 subtitle tracks: %+v", subs)
+	t.Logf("subtitle tracks: %+v", subs)
 
 	if err := p.SetSubtitleVisible(false); err != nil {
 		t.Fatalf("SetSubtitleVisible(false): %v", err)
 	}
-	waitFor(t, 3*time.Second, "sub-visibility=false", func() bool { return !p.Snapshot().SubVisible })
+	waitFor(t, 4*time.Second, "sub-visibility=false", func() bool { return !p.Snapshot().SubVisible })
 	if err := p.SetSubtitleVisible(true); err != nil {
 		t.Fatalf("SetSubtitleVisible(true): %v", err)
 	}
-	waitFor(t, 3*time.Second, "sub-visibility=true", func() bool { return p.Snapshot().SubVisible })
+	waitFor(t, 4*time.Second, "sub-visibility=true", func() bool { return p.Snapshot().SubVisible })
 
 	if err := p.SelectSubtitleTrack(subs[0].ID); err != nil {
 		t.Fatalf("SelectSubtitleTrack: %v", err)
 	}
-	waitFor(t, 3*time.Second, "embedded subtitle selected", func() bool {
+	waitFor(t, 4*time.Second, "embedded subtitle selected", func() bool {
 		return p.Snapshot().SubTrackID == subs[0].ID
 	})
 	if err := p.DisableSubtitleTrack(); err != nil {
 		t.Fatalf("DisableSubtitleTrack: %v", err)
 	}
-	waitFor(t, 3*time.Second, "subtitles disabled", func() bool {
+	waitFor(t, 4*time.Second, "subtitles disabled", func() bool {
 		return p.Snapshot().SubTrackID == 0
 	})
 
-	// M2: Verify custom HTTP Headers, User-Agent, and Referer end-to-end AND
+	// Verify custom HTTP Headers, User-Agent, and Referer end-to-end AND
 	// confirm per-open headers do not leak to subsequent Open calls.
 	var hdrMu sync.Mutex
 	type reqHeaders struct {
@@ -296,14 +339,14 @@ func TestIntegrationMKVZeroCopyAndM2(t *testing.T) {
 	if err := p.Open(srv.URL+"/first.mkv", OpenOptions{
 		Headers: map[string]string{
 			"Authorization": "Bearer test-token,with,commas",
-			"X-MyGo-Test":   "mygo-player-m2",
+			"X-MyGo-Test":   "mygo-player-v02",
 		},
 		UserAgent: "MyGoPlayerTest/1.0",
 		Referrer:  "https://ref.mygo.dev/watch",
 	}); err != nil {
 		t.Fatalf("Open(http first): %v", err)
 	}
-	waitFor(t, 6*time.Second, "HTTP request /first.mkv", func() bool {
+	waitFor(t, 8*time.Second, "HTTP request /first.mkv", func() bool {
 		hdrMu.Lock()
 		defer hdrMu.Unlock()
 		_, ok := byPath["/first.mkv"]
@@ -313,8 +356,8 @@ func TestIntegrationMKVZeroCopyAndM2(t *testing.T) {
 	hdrMu.Lock()
 	h1 := byPath["/first.mkv"]
 	hdrMu.Unlock()
-	t.Logf("M2 HTTP /first.mkv headers: %+v", h1)
-	if h1.auth != "Bearer test-token,with,commas" || h1.custom != "mygo-player-m2" ||
+	t.Logf("HTTP /first.mkv headers: %+v", h1)
+	if h1.auth != "Bearer test-token,with,commas" || h1.custom != "mygo-player-v02" ||
 		h1.ua != "MyGoPlayerTest/1.0" || h1.ref != "https://ref.mygo.dev/watch" {
 		t.Fatalf("unexpected /first.mkv headers: %+v", h1)
 	}
@@ -323,7 +366,7 @@ func TestIntegrationMKVZeroCopyAndM2(t *testing.T) {
 	if err := p.Open(srv.URL + "/second.mkv"); err != nil {
 		t.Fatalf("Open(http second): %v", err)
 	}
-	waitFor(t, 6*time.Second, "HTTP request /second.mkv", func() bool {
+	waitFor(t, 8*time.Second, "HTTP request /second.mkv", func() bool {
 		hdrMu.Lock()
 		defer hdrMu.Unlock()
 		_, ok := byPath["/second.mkv"]
@@ -333,20 +376,87 @@ func TestIntegrationMKVZeroCopyAndM2(t *testing.T) {
 	hdrMu.Lock()
 	h2 := byPath["/second.mkv"]
 	hdrMu.Unlock()
-	t.Logf("M2 HTTP /second.mkv headers (after reset): %+v", h2)
+	t.Logf("HTTP /second.mkv headers (after reset): %+v", h2)
 	if h2.auth != "" || h2.custom != "" || h2.ref != "" {
 		t.Fatalf("per-open HTTP headers leaked to subsequent Open: %+v", h2)
 	}
 }
 
+// TestIntegrationLifecycleOpenClose exercises repeated Player creation,
+// playback, frame rendering, and teardown (including rapid close before first
+// frame and idempotent double Close), validating the singleton callback router
+// and clean resource teardown across lifetimes.
+func TestIntegrationLifecycleOpenClose(t *testing.T) {
+	ffmpeg := requireLibMPVAndFFmpeg(t)
+	tmp := t.TempDir()
+	mkvPath, _ := generateTestMKV(t, ffmpeg, tmp)
+
+	const cycles = 4
+	for i := range cycles {
+		p, err := New(Options{
+			AudioOutput: "null",
+		})
+		if err != nil {
+			t.Fatalf("cycle %d: New: %v", i, err)
+		}
+		if err := p.Open(mkvPath); err != nil {
+			_ = p.Close()
+			t.Fatalf("cycle %d: Open: %v", i, err)
+		}
+		waitFor(t, 8*time.Second, fmt.Sprintf("cycle %d first frame", i), func() bool {
+			w, h := p.FrameSize()
+			return p.FramesRendered() > 0 && w > 0 && h > 0
+		})
+		tt := ui.NewTester(func(c *ui.Context) {
+			View(c, p).Fill()
+		}, 160, 120)
+		tt.Frame()
+		topC := tt.Image().RGBAAt(80, 30)
+		if topC.R < 180 || topC.B > 60 {
+			_ = p.Close()
+			t.Fatalf("cycle %d: expected top RED pixel, got %+v", i, topC)
+		}
+
+		if err := p.Close(); err != nil {
+			t.Fatalf("cycle %d: Close: %v", i, err)
+		}
+		// Second Close must be a safe no-op.
+		if err := p.Close(); err != nil {
+			t.Fatalf("cycle %d: second Close: %v", i, err)
+		}
+		if err := p.Play(); !errors.Is(err, ErrClosed) {
+			t.Fatalf("cycle %d: Play after Close = %v, want ErrClosed", i, err)
+		}
+		if err := p.Open(mkvPath); !errors.Is(err, ErrClosed) {
+			t.Fatalf("cycle %d: Open after Close = %v, want ErrClosed", i, err)
+		}
+	}
+
+	// Rapid open -> immediate close cycles to catch shutdown races.
+	for i := range 2 {
+		p, err := New(Options{AudioOutput: "null"})
+		if err != nil {
+			t.Fatalf("rapid cycle %d: New: %v", i, err)
+		}
+		_ = p.Open(mkvPath)
+		if err := p.Close(); err != nil {
+			t.Fatalf("rapid cycle %d: Close: %v", i, err)
+		}
+	}
+}
+
 func generateTestMKV(t *testing.T, ffmpeg, dir string) (mkvPath, extSubPath string) {
 	t.Helper()
-	embSub := filepath.Join(dir, "embedded.srt")
-	extSub := filepath.Join(dir, "external.srt")
-	mkvPath = filepath.Join(dir, "fixture.mkv")
+	zhDir := filepath.Join(dir, "测试中文目录")
+	if err := os.MkdirAll(zhDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	embSub := filepath.Join(zhDir, "内嵌字幕.srt")
+	extSub := filepath.Join(zhDir, "外挂中文字幕.srt")
+	mkvPath = filepath.Join(zhDir, "中文测试视频.mkv")
 
 	sub1 := "1\n00:00:00,000 --> 00:00:03,000\nEmbedded English Subtitle\n"
-	sub2 := "1\n00:00:00,000 --> 00:00:03,000\nExternal Chinese Subtitle\n"
+	sub2 := "1\n00:00:00,000 --> 00:00:03,000\n外挂中文字幕测试\n"
 	if err := os.WriteFile(embSub, []byte(sub1), 0o644); err != nil {
 		t.Fatal(err)
 	}

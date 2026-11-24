@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -12,10 +11,14 @@ func TestRunUpdatesManifestAndCopiesAssets(t *testing.T) {
 	tmp := t.TempDir()
 	armSrc := filepath.Join(tmp, "arm64.dylib")
 	amdSrc := filepath.Join(tmp, "amd64.dylib")
+	winSrc := filepath.Join(tmp, "mpv-2.dll")
 	if err := os.WriteFile(armSrc, []byte("fake-arm64-dylib"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(amdSrc, []byte("fake-amd64-dylib"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(winSrc, []byte("fake-windows-amd64-dll"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -29,7 +32,15 @@ func TestRunUpdatesManifestAndCopiesAssets(t *testing.T) {
 		"darwin-amd64": amdSrc,
 	})
 	if err != nil {
-		t.Fatalf("run failed: %v", err)
+		t.Fatalf("run (darwin) failed: %v", err)
+	}
+
+	// Second incremental run adds windows-amd64 while preserving darwin entries.
+	err = run(manifestPath, "mpv", source, release, outDir, map[string]string{
+		"windows-amd64": winSrc,
+	})
+	if err != nil {
+		t.Fatalf("run (windows) failed: %v", err)
 	}
 
 	raw, err := os.ReadFile(manifestPath)
@@ -43,19 +54,29 @@ func TestRunUpdatesManifestAndCopiesAssets(t *testing.T) {
 	if len(m.Libraries) != 1 || m.Libraries[0].Name != "mpv" || m.Libraries[0].Source != source {
 		t.Fatalf("unexpected manifest: %+v", m)
 	}
-	for _, target := range []string{"darwin-arm64", "darwin-amd64"} {
-		f, ok := m.Libraries[0].Files[target]
+	for _, tc := range []struct {
+		target string
+		name   string
+		prefix string
+		ext    string
+	}{
+		{"darwin-arm64", "libmpv.dylib", "libmpv", ".dylib"},
+		{"darwin-amd64", "libmpv.dylib", "libmpv", ".dylib"},
+		{"windows-amd64", "mpv-2.dll", "mpv-2", ".dll"},
+	} {
+		f, ok := m.Libraries[0].Files[tc.target]
 		if !ok {
-			t.Fatalf("missing target %s", target)
+			t.Fatalf("missing target %s", tc.target)
 		}
-		if f.Name != "libmpv.dylib" {
-			t.Fatalf("%s name = %q, want libmpv.dylib", target, f.Name)
+		if f.Name != tc.name {
+			t.Fatalf("%s name = %q, want %s", tc.target, f.Name, tc.name)
 		}
 		if len(f.SHA256) != 64 {
-			t.Fatalf("%s invalid sha256 %q", target, f.SHA256)
+			t.Fatalf("%s invalid sha256 %q", tc.target, f.SHA256)
 		}
-		if !strings.HasPrefix(f.URL, release+"/libmpv-"+target+"-"+f.SHA256[:12]+".dylib") {
-			t.Fatalf("%s unexpected url %q", target, f.URL)
+		wantURL := release + "/" + tc.prefix + "-" + tc.target + "-" + f.SHA256[:12] + tc.ext
+		if f.URL != wantURL {
+			t.Fatalf("%s url = %q, want %q", tc.target, f.URL, wantURL)
 		}
 		asset := filepath.Join(outDir, filepath.Base(f.URL))
 		if _, err := os.Stat(asset); err != nil {

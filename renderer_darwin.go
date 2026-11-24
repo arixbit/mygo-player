@@ -13,6 +13,7 @@ import (
 	"github.com/ebitengine/purego"
 	"github.com/egoist/mygo/ffi"
 	"github.com/egoist/mygo/native"
+	"github.com/egoist/mygo/ui"
 
 	"github.com/arixbit/mygo-player/internal/mpv"
 )
@@ -45,8 +46,11 @@ const (
 	// native.Texture retains pending + shown + 3 in-flight surfaces (= 5 max),
 	// so 6 slots guarantees a free IOSurfaceIsInUse == 0 slot in steady state.
 	surfacePoolCap = 6
-	maxRenderDim   = 7680
 )
+
+func defaultHWDec() HWDecMode { return HWDecAutoSafe }
+
+func defaultAudioOutput() string { return "" }
 
 var apiTypeOpenGL = []byte("opengl\x00")
 
@@ -250,10 +254,11 @@ type darwinRenderer struct {
 	lastErr      error
 }
 
-func newRenderer(client *mpv.Client, tex *native.Texture) (frameRenderer, error) {
+func newRenderer(client *mpv.Client, _ func()) (*native.Texture, frameRenderer, error) {
 	if err := initDarwinGL(); err != nil {
-		return nil, fmt.Errorf("player: macOS OpenGL/IOSurface init failed: %w", err)
+		return nil, nil, fmt.Errorf("player: macOS OpenGL/IOSurface init failed: %w", err)
 	}
+	tex := native.NewTexture()
 	r := &darwinRenderer{
 		client: client,
 		tex:    tex,
@@ -265,9 +270,9 @@ func newRenderer(client *mpv.Client, tex *native.Texture) (frameRenderer, error)
 	go r.run(ready)
 	if err := <-ready; err != nil {
 		<-r.done
-		return nil, err
+		return nil, nil, err
 	}
-	return r, nil
+	return tex, r, nil
 }
 
 func (r *darwinRenderer) SetViewportSize(w, h int) {
@@ -303,6 +308,18 @@ func (r *darwinRenderer) RequestRedraw() {
 
 func (r *darwinRenderer) FramesRendered() uint64 {
 	return r.framesDrawn.Load()
+}
+
+func (r *darwinRenderer) FrameSize() (int, int) {
+	if r.tex == nil {
+		return 0, 0
+	}
+	w, h := r.tex.Size()
+	return int(w), int(h)
+}
+
+func (r *darwinRenderer) ImageSource() ui.ImageSource {
+	return r.tex
 }
 
 func (r *darwinRenderer) Close() {
@@ -659,14 +676,4 @@ func destroySlot(s *surfaceSlot) {
 		darwinGL.cfRelease(s.surface)
 		s.surface = 0
 	}
-}
-
-func clampRenderDim(v int) int {
-	if v <= 0 {
-		return 0
-	}
-	if v > maxRenderDim {
-		return maxRenderDim
-	}
-	return v
 }

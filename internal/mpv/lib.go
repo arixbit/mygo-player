@@ -78,7 +78,7 @@ func SetLibraryPath(path string) {
 // LibraryPath resolves the libmpv dynamic library path using mygo/ffi lookup
 // rules (MYGO_NATIVE_MPV, app resources, Frameworks, executable dir,
 // .mygo/native, and mygo-plugin.json published builds), falling back to
-// standard local macOS installation paths in unpackaged development runs.
+// standard local development paths in unpackaged runs.
 func LibraryPath() (string, error) {
 	loaderMu.Lock()
 	p := customPath
@@ -95,11 +95,11 @@ func LibraryPath() (string, error) {
 		return path, nil
 	}
 	if !mygo.App.IsPackaged() && os.Getenv(ffi.EnvVar("mpv")) == "" {
-		if sysPath := findDevSystemLib(); sysPath != "" {
+		if sysPath := findDevSystemLib(dir); sysPath != "" {
 			return sysPath, nil
 		}
 	}
-	return "", fmt.Errorf("mpv: %w (set %s=/path/to/libmpv.dylib or install libmpv)", err, ffi.EnvVar("mpv"))
+	return "", fmt.Errorf("mpv: %w (set %s=/path/to/%s or install libmpv)", err, ffi.EnvVar("mpv"), defaultLibFileName())
 }
 
 // Load loads libmpv and binds its C symbols once.
@@ -132,13 +132,13 @@ func Load() error {
 			return
 		} else {
 			if !mygo.App.IsPackaged() && os.Getenv(ffi.EnvVar("mpv")) == "" {
-				if sysPath := findDevSystemLib(); sysPath != "" {
+				if sysPath := findDevSystemLib(dir); sysPath != "" {
 					loadedPath = sysPath
 					loadedErr = loadDirect(sysPath)
 					return
 				}
 			}
-			loadedErr = fmt.Errorf("mpv: %w (set %s=/path/to/libmpv.dylib or install libmpv)", err, ffi.EnvVar("mpv"))
+			loadedErr = fmt.Errorf("mpv: %w (set %s=/path/to/%s or install libmpv)", err, ffi.EnvVar("mpv"), defaultLibFileName())
 		}
 	})
 	return loadedErr
@@ -166,15 +166,46 @@ func newFFILib(m []byte, dir string) *ffi.Library {
 	return lib
 }
 
-func findDevSystemLib() string {
-	if runtime.GOOS != "darwin" {
-		return ""
+func defaultLibFileName() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "libmpv.dylib"
+	case "windows":
+		return "mpv-2.dll"
+	default:
+		return "libmpv.so"
 	}
-	candidates := []string{
-		"/opt/homebrew/lib/libmpv.dylib",
-		"/opt/homebrew/lib/libmpv.2.dylib",
-		"/usr/local/lib/libmpv.dylib",
-		"/usr/local/lib/libmpv.2.dylib",
+}
+
+func findDevSystemLib(pkgDir string) string {
+	var candidates []string
+	switch runtime.GOOS {
+	case "darwin":
+		candidates = []string{
+			"/opt/homebrew/lib/libmpv.dylib",
+			"/opt/homebrew/lib/libmpv.2.dylib",
+			"/usr/local/lib/libmpv.dylib",
+			"/usr/local/lib/libmpv.2.dylib",
+		}
+	case "windows":
+		names := []string{"mpv-2.dll", "libmpv-2.dll", "mpv.dll"}
+		var dirs []string
+		if exe, err := os.Executable(); err == nil {
+			dirs = append(dirs, filepath.Dir(exe))
+		}
+		if wd, err := os.Getwd(); err == nil {
+			dirs = append(dirs, wd, filepath.Join(wd, ".mygo", "native", runtime.GOOS+"-"+runtime.GOARCH))
+		}
+		if pkgDir != "" {
+			dirs = append(dirs, filepath.Join(pkgDir, ".mygo", "native", runtime.GOOS+"-"+runtime.GOARCH))
+		}
+		for _, d := range dirs {
+			for _, name := range names {
+				candidates = append(candidates, filepath.Join(d, name))
+			}
+		}
+	default:
+		return ""
 	}
 	for _, c := range candidates {
 		if info, err := os.Stat(c); err == nil && info.Mode().IsRegular() {

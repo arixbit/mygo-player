@@ -13,6 +13,7 @@ import (
 	"unsafe"
 
 	"github.com/egoist/mygo/native"
+	"github.com/egoist/mygo/ui"
 
 	"github.com/arixbit/mygo-player/internal/mpv"
 )
@@ -25,6 +26,8 @@ type frameRenderer interface {
 	SetVideoSize(w, h int)
 	RequestRedraw()
 	FramesRendered() uint64
+	FrameSize() (w, h int)
+	ImageSource() ui.ImageSource
 	Close()
 }
 
@@ -49,8 +52,9 @@ const (
 	propMediaTitle
 )
 
-// Player manages a libmpv playback instance with zero-copy GPU rendering into a
-// MyGo native.Texture. Its methods are safe to call from any goroutine.
+// Player manages a libmpv playback instance rendered into MyGo's native UI
+// scene graph (zero-copy native.Texture on macOS; double-buffered ui.Bitmap on
+// Windows). Its methods are safe to call from any goroutine.
 type Player struct {
 	client   *mpv.Client
 	tex      *native.Texture
@@ -73,7 +77,7 @@ type Player struct {
 	invalidate func()
 }
 
-// New creates and initializes a libmpv Player with zero-copy GPU rendering.
+// New creates and initializes a libmpv Player integrated with MyGo's UI.
 func New(opts ...Options) (*Player, error) {
 	var opt Options
 	if len(opts) > 0 {
@@ -99,7 +103,7 @@ func New(opts ...Options) (*Player, error) {
 	}
 	hwdec := opt.HWDec
 	if hwdec == "" {
-		hwdec = HWDecAutoSafe
+		hwdec = defaultHWDec()
 	}
 	vol := opt.Volume
 	if vol <= 0 && !opt.StartMuted {
@@ -129,8 +133,12 @@ func New(opts ...Options) (*Player, error) {
 	if opt.Loop {
 		baseOpts = append(baseOpts, [2]string{"loop-file", "inf"})
 	}
-	if opt.AudioOutput != "" {
-		baseOpts = append(baseOpts, [2]string{"ao", opt.AudioOutput})
+	ao := opt.AudioOutput
+	if ao == "" {
+		ao = defaultAudioOutput()
+	}
+	if ao != "" {
+		baseOpts = append(baseOpts, [2]string{"ao", ao})
 	}
 	for _, kv := range baseOpts {
 		if err := client.SetOptionString(kv[0], kv[1]); err != nil {
@@ -169,16 +177,8 @@ func New(opts ...Options) (*Player, error) {
 		return nil, fmt.Errorf("player: initialize libmpv: %w", err)
 	}
 
-	tex := native.NewTexture()
-	renderer, err := newRenderer(client, tex)
-	if err != nil {
-		return nil, err
-	}
-
 	p := &Player{
 		client:          client,
-		tex:             tex,
-		renderer:        renderer,
 		opts:            opt,
 		defaultHeaders:  maps.Clone(opt.HTTPHeaders),
 		defaultUA:       opt.UserAgent,
@@ -192,6 +192,13 @@ func New(opts ...Options) (*Player, error) {
 			SubVisible: true,
 		},
 	}
+
+	tex, renderer, err := newRenderer(client, p.notifyFrame)
+	if err != nil {
+		return nil, err
+	}
+	p.tex = tex
+	p.renderer = renderer
 
 	if err := p.applyHTTPConfig(p.defaultHeaders, p.defaultUA, p.defaultReferrer); err != nil {
 		renderer.Close()
@@ -240,7 +247,9 @@ func (p *Player) observeProperties() error {
 	return nil
 }
 
-// Texture returns the zero-copy GPU native.Texture suitable for ui.Image(c, p.Texture()).
+// Texture returns the zero-copy GPU native.Texture on macOS, or nil on
+// platforms that present frames through ui.Bitmap (such as Windows). Prefer
+// View(c, p) or ImageSource() for cross-platform UI rendering.
 func (p *Player) Texture() *native.Texture {
 	if p == nil {
 		return nil
@@ -248,8 +257,27 @@ func (p *Player) Texture() *native.Texture {
 	return p.tex
 }
 
-// SetRenderSize sets the target physical pixel dimensions for zero-copy GPU
-// rendering. Pass (0, 0) to revert to the video's native resolution.
+// ImageSource returns the ui.ImageSource for the current video frame
+// (*native.Texture on macOS, *ui.Bitmap on Windows). Call it on the UI thread
+// (typically via View(c, p)).
+func (p *Player) ImageSource() ui.ImageSource {
+	if p == nil || p.renderer == nil {
+		return nil
+	}
+	return p.renderer.ImageSource()
+}
+
+// FrameSize returns the pixel dimensions of the most recently rendered video
+// frame on any supported platform.
+func (p *Player) FrameSize() (width, height int) {
+	if p == nil || p.renderer == nil {
+		return 0, 0
+	}
+	return p.renderer.FrameSize()
+}
+
+// SetRenderSize sets the target physical pixel dimensions for video rendering.
+// Pass (0, 0) to revert to the video's native resolution.
 func (p *Player) SetRenderSize(width, height int) {
 	if p == nil || p.closed.Load() || p.renderer == nil {
 		return
@@ -257,7 +285,7 @@ func (p *Player) SetRenderSize(width, height int) {
 	p.renderer.SetViewportSize(width, height)
 }
 
-// FramesRendered returns the total number of GPU frames presented since creation.
+// FramesRendered returns the total number of video frames rendered since creation.
 func (p *Player) FramesRendered() uint64 {
 	if p == nil || p.renderer == nil {
 		return 0
@@ -629,7 +657,7 @@ func (p *Player) SetReferrer(ref string) error {
 }
 
 // SetHWDec dynamically updates the hardware decoding mode (e.g. HWDecAutoSafe,
-// HWDecVideoToolbox, HWDecNone).
+// HWDecAutoCopy, HWDecVideoToolbox, HWDecD3D11VACopy, HWDecNone).
 func (p *Player) SetHWDec(mode HWDecMode) error {
 	p.cmdMu.Lock()
 	defer p.cmdMu.Unlock()
@@ -637,7 +665,7 @@ func (p *Player) SetHWDec(mode HWDecMode) error {
 		return ErrClosed
 	}
 	if mode == "" {
-		mode = HWDecAutoSafe
+		mode = defaultHWDec()
 	}
 	return p.client.SetPropertyString("hwdec", string(mode))
 }
@@ -699,6 +727,18 @@ func (p *Player) setInvalidate(fn func()) {
 	p.mu.Lock()
 	p.invalidate = fn
 	p.mu.Unlock()
+}
+
+func (p *Player) notifyFrame() {
+	if p.closing.Load() {
+		return
+	}
+	p.mu.RLock()
+	inv := p.invalidate
+	p.mu.RUnlock()
+	if inv != nil {
+		inv()
+	}
 }
 
 func (p *Player) notifyUI() {

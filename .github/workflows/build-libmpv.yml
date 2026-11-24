@@ -1,4 +1,4 @@
-name: Build & Publish LGPL libmpv (macOS)
+name: Build & Publish LGPL libmpv
 
 on:
   workflow_dispatch:
@@ -11,8 +11,16 @@ on:
         description: "GitHub Release tag hosting the native library assets"
         required: true
         default: "native-mpv"
+      targets:
+        description: "Platforms to build"
+        type: choice
+        options:
+          - all
+          - macos
+          - windows
+        default: "all"
       publish_release:
-        description: "Upload built dylibs to GitHub Release"
+        description: "Upload built libraries to GitHub Release and update mygo-plugin.json"
         type: boolean
         default: true
   push:
@@ -23,7 +31,8 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-macos:
+    if: github.event_name == 'push' || inputs.targets == 'all' || inputs.targets == 'macos'
     strategy:
       fail-fast: false
       matrix:
@@ -63,6 +72,7 @@ jobs:
       - name: Verify libmpv.dylib with zero-cgo Go integration tests
         env:
           CGO_ENABLED: "0"
+          MYGO_REQUIRE_LIBMPV: "1"
           MYGO_NATIVE_MPV: ${{ github.workspace }}/dist/libmpv-darwin-${{ matrix.goarch }}.dylib
         run: go test -v ./...
 
@@ -73,10 +83,81 @@ jobs:
           path: dist/libmpv-darwin-${{ matrix.goarch }}.dylib
           if-no-files-found: error
 
+  build-windows:
+    if: github.event_name == 'push' || inputs.targets == 'all' || inputs.targets == 'windows'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up MSYS2 UCRT64 build toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-meson
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-nasm
+            mingw-w64-ucrt-x86_64-python-jinja
+            make
+            tar
+            xz
+            bzip2
+            gzip
+            curl
+            git
+            diffutils
+            autoconf
+            automake
+            libtool
+            patch
+
+      - name: Build self-contained LGPL 2.1+ mpv-2.dll
+        shell: msys2 {0}
+        env:
+          MPV_VERSION: ${{ github.event.inputs.mpv_version || '0.40.0' }}
+        run: |
+          chmod +x scripts/build-libmpv-windows.sh
+          ./scripts/build-libmpv-windows.sh amd64 dist/mpv-2.dll
+
+      - name: Install standalone ffmpeg for Go integration test fixture
+        shell: pwsh
+        run: choco install ffmpeg --no-progress
+
+      - name: Verify mpv-2.dll with zero-cgo Go integration tests (clean Windows PATH)
+        shell: pwsh
+        env:
+          CGO_ENABLED: "0"
+          MYGO_REQUIRE_LIBMPV: "1"
+          MYGO_NATIVE_MPV: ${{ github.workspace }}\dist\mpv-2.dll
+        run: |
+          # Ensure MSYS2 bin directories are NOT on PATH so loading mpv-2.dll
+          # proves zero external MSYS2/MinGW runtime DLL dependencies.
+          $env:PATH = ($env:PATH -split ';' | Where-Object { $_ -notmatch 'msys64' }) -join ';'
+          go test -v ./...
+
+      - name: Upload built DLL artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpv-2-windows-amd64
+          path: dist/mpv-2.dll
+          if-no-files-found: error
+
   publish:
-    needs: build
+    needs: [build-macos, build-windows]
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || inputs.publish_release
+    if: >-
+      always() &&
+      (github.event_name == 'push' || inputs.publish_release) &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
     steps:
       - uses: actions/checkout@v4
 
@@ -105,13 +186,22 @@ jobs:
         env:
           MPV_VERSION: ${{ github.event.inputs.mpv_version || '0.40.0' }}
         run: |
-          go run ./scripts/update-manifest \
-            -manifest mygo-plugin.json \
-            -source "https://github.com/mpv-player/mpv/releases/tag/v${MPV_VERSION}" \
-            -release "${{ steps.meta.outputs.url }}" \
-            -out dist/release \
-            -file "darwin-arm64=artifacts/libmpv-darwin-arm64.dylib" \
-            -file "darwin-amd64=artifacts/libmpv-darwin-amd64.dylib"
+          ARGS=(
+            -manifest mygo-plugin.json
+            -source "https://github.com/mpv-player/mpv/releases/tag/v${MPV_VERSION}"
+            -release "${{ steps.meta.outputs.url }}"
+            -out dist/release
+          )
+          if [[ -f artifacts/libmpv-darwin-arm64.dylib ]]; then
+            ARGS+=(-file "darwin-arm64=artifacts/libmpv-darwin-arm64.dylib")
+          fi
+          if [[ -f artifacts/libmpv-darwin-amd64.dylib ]]; then
+            ARGS+=(-file "darwin-amd64=artifacts/libmpv-darwin-amd64.dylib")
+          fi
+          if [[ -f artifacts/mpv-2.dll ]]; then
+            ARGS+=(-file "windows-amd64=artifacts/mpv-2.dll")
+          fi
+          go run ./scripts/update-manifest "${ARGS[@]}"
           cat mygo-plugin.json
 
       - name: Create or update GitHub Release
@@ -123,7 +213,7 @@ jobs:
             gh release create "$TAG" \
               --repo "${{ github.repository }}" \
               --title "$TAG" \
-              --notes "Self-contained macOS LGPL-2.1-or-later libmpv dynamic libraries built by GitHub Actions for github.com/arixbit/mygo-player." \
+              --notes "Self-contained macOS & Windows LGPL-2.1-or-later libmpv dynamic libraries built by GitHub Actions for github.com/arixbit/mygo-player." \
               --latest=false
           fi
           gh release upload "$TAG" dist/release/* --repo "${{ github.repository }}" --clobber

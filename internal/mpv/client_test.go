@@ -46,3 +46,14 @@ func TestABIStructLayouts(t *testing.T) {
 		t.Fatalf("sizeof(OpenGLFBO) = %d, want 16", got)
 	}
 }
+
+func TestRenderUpdateTrampolineSingleton(t *testing.T) {
+	addr1 := renderUpdateTrampoline()
+	addr2 := renderUpdateTrampoline()
+	if addr1 == 0 {
+		t.Fatal("renderUpdateTrampoline() returned 0")
+	}
+	if addr1 != addr2 {
+		t.Fatalf("renderUpdateTrampoline() allocated distinct callbacks: %#x vs %#x", addr1, addr2)
+	}
+}

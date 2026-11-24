@@ -117,7 +117,8 @@ func run(manifestPath, libName, sourceURL, releaseURL, outDir string, inputs map
 		if err != nil {
 			return err
 		}
-		assetName := fmt.Sprintf("lib%s-%s-%s-%s%s", strings.TrimPrefix(libName, "lib"), goos, goarch, sum[:12], ext)
+		assetPrefix := strings.TrimSuffix(inAppName, ext)
+		assetName := fmt.Sprintf("%s-%s-%s-%s%s", assetPrefix, goos, goarch, sum[:12], ext)
 		assetPath := filepath.Join(outDir, assetName)
 		if err := copyFile(src, assetPath); err != nil {
 			return fmt.Errorf("copy %s -> %s: %w", src, assetPath, err)
@@ -167,6 +168,9 @@ func platformLibraryName(name, goos string) (fileName, ext string, err error) {
 	case "linux":
 		return "lib" + base + ".so", ".so", nil
 	case "windows":
+		if base == "mpv" {
+			return "mpv-2.dll", ".dll", nil
+		}
 		return base + ".dll", ".dll", nil
 	default:
 		return "", "", fmt.Errorf("unsupported GOOS %q", goos)

@@ -22,13 +22,12 @@ downstream applications can replace the `libmpv` shared library at any time
 without recompiling the Go application:
 
 - Set the `MYGO_NATIVE_MPV` environment variable to the path of a compatible
-  `libmpv` shared library (`libmpv.dylib` / `libmpv.2.dylib` on macOS), or
-- Replace `Contents/Resources/libmpv.dylib` inside a packaged macOS `.app` bundle.
+  `libmpv` shared library (`libmpv.dylib` / `libmpv.2.dylib` on macOS; `mpv-2.dll` on Windows), or
+- Replace `Contents/Resources/libmpv.dylib` inside a packaged macOS `.app` bundle or `mpv-2.dll` next to the Windows application binary.
 
 ### Included Third-Party Libraries in Prebuilt `libmpv`
 
-When `scripts/build-libmpv-macos.sh` builds a self-contained `libmpv.dylib`, it
-statically links only LGPL-2.1+, MIT, BSD, ISC, or Zlib-compatible libraries:
+When `scripts/build-libmpv-macos.sh` or `scripts/build-libmpv-windows.sh` builds a self-contained `libmpv.dylib` / `mpv-2.dll`, it statically links only LGPL-2.1+, MIT, BSD, ISC, FTL, or Zlib-compatible libraries:
 
 - **mpv** — LGPL-2.1-or-later (when built with `-Dgpl=false`)
 - **FFmpeg** (`libavcodec`, `libavformat`, `libavutil`, `libavfilter`, `libswscale`, `libswresample`) — LGPL-2.1-or-later (built without `--enable-gpl`, `--enable-version3`, or `--enable-nonfree`)
@@ -40,10 +39,9 @@ statically links only LGPL-2.1+, MIT, BSD, ISC, or Zlib-compatible libraries:
 - **Little CMS (lcms2)** — MIT
 - **dav1d** — BSD-2-Clause
 - **libunibreak** — Zlib
-- **uchardet** — MPL-1.1 / GPL-2.0 / LGPL-2.1 (used under LGPL-2.1)
-- **shaderc** (if enabled) — Apache-2.0
-- **xxHash** — BSD-2-Clause
+- **libiconv** (Windows static build) — LGPL-2.1-or-later
+- **zlib** (Windows static build) — Zlib
 
 Full corresponding source code versions and exact configure flags used to build
 each published `libmpv` release artifact are recorded in `scripts/build-libmpv-macos.sh`
-and attached to each GitHub Release.
+and `scripts/build-libmpv-windows.sh`, and attached to each GitHub Release.

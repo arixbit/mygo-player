@@ -9,10 +9,16 @@ const (
 	// HWDecAutoSafe enables safe zero-copy hardware decoding (VideoToolbox on
 	// macOS) and falls back to software decoding for unsupported streams.
 	HWDecAutoSafe HWDecMode = "auto-safe"
+	// HWDecAutoCopy enables safe copy-back hardware decoding (such as D3D11VA on
+	// Windows or VideoToolbox copy-back on macOS) and falls back to software
+	// decoding for unsupported streams. Default on Windows.
+	HWDecAutoCopy HWDecMode = "auto-copy"
 	// HWDecVideoToolbox explicitly requests Apple VideoToolbox zero-copy decoding.
 	HWDecVideoToolbox HWDecMode = "videotoolbox"
 	// HWDecVideoToolboxCopy requests VideoToolbox decoding with copy-back.
 	HWDecVideoToolboxCopy HWDecMode = "videotoolbox-copy"
+	// HWDecD3D11VACopy explicitly requests Windows D3D11VA hardware decoding with copy-back.
+	HWDecD3D11VACopy HWDecMode = "d3d11va-copy"
 	// HWDecNone disables hardware decoding (software decoding only).
 	HWDecNone HWDecMode = "no"
 )
@@ -94,7 +100,8 @@ func (s State) String() string {
 
 // Options configures a new Player created by New.
 type Options struct {
-	// HWDec configures hardware decoding. Defaults to HWDecAutoSafe.
+	// HWDec configures hardware decoding. Defaults to HWDecAutoSafe on macOS
+	// and HWDecAutoCopy on Windows.
 	HWDec HWDecMode
 	// KeepOpen keeps the last frame visible when playback reaches EOF.
 	// Defaults to true when KeepOpen is nil.
@@ -113,6 +120,7 @@ type Options struct {
 	// Referrer sets the default HTTP Referer header for network streams.
 	Referrer string
 	// AudioOutput overrides mpv's "ao" option (e.g. "null" for headless tests).
+	// Defaults to "wasapi" on Windows and mpv's native default on macOS.
 	AudioOutput string
 	// LogLevel enables libmpv log callbacks ("fatal", "error", "warn", "info", "v", "debug").
 	// Empty disables log message delivery.

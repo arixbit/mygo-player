@@ -16,8 +16,10 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Check build script syntax
-        run: bash -n scripts/build-libmpv-macos.sh
+      - name: Check build scripts syntax
+        run: |
+          bash -n scripts/build-libmpv-macos.sh
+          bash -n scripts/build-libmpv-windows.sh
 
       - name: Vet and build (zero cgo)
         env:
@@ -26,9 +28,13 @@ jobs:
           go vet ./...
           go build ./...
 
-      - name: Run unit tests (zero cgo)
+      - name: Install ffmpeg for integration tests
+        run: brew install ffmpeg
+
+      - name: Run unit & macOS integration tests (zero cgo)
         env:
           CGO_ENABLED: "0"
+          MYGO_REQUIRE_LIBMPV: "1"
         run: go test -v ./...
 
       - name: Verify cross-platform compilation (zero cgo)
@@ -36,5 +42,40 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           GOOS=darwin GOARCH=amd64 go build ./...
+          GOOS=darwin GOARCH=arm64 go build ./...
           GOOS=linux GOARCH=amd64 go build ./...
           GOOS=windows GOARCH=amd64 go build ./...
+          GOOS=windows GOARCH=arm64 go build ./...
+
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Vet and build (zero cgo)
+        shell: pwsh
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          go vet ./...
+          go build ./...
+
+      - name: Install ffmpeg for integration tests
+        shell: pwsh
+        run: choco install ffmpeg --no-progress
+
+      - name: Run unit & Windows integration tests (zero cgo)
+        shell: pwsh
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          $manifest = Get-Content mygo-plugin.json -Raw | ConvertFrom-Json
+          if ($manifest.libraries[0].files.'windows-amd64') {
+            $env:MYGO_REQUIRE_LIBMPV = "1"
+          }
+          go test -v ./...

@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package player
 
@@ -12,6 +12,10 @@ import (
 	"github.com/arixbit/mygo-player/internal/mpv"
 )
 
-func newRenderer(_ *mpv.Client, _ *native.Texture) (frameRenderer, error) {
-	return nil, fmt.Errorf("player: zero-copy renderer not implemented on %s: %w", runtime.GOOS, errors.ErrUnsupported)
+func defaultHWDec() HWDecMode { return HWDecAutoSafe }
+
+func defaultAudioOutput() string { return "" }
+
+func newRenderer(_ *mpv.Client, _ func()) (*native.Texture, frameRenderer, error) {
+	return nil, nil, fmt.Errorf("player: renderer not implemented on %s: %w", runtime.GOOS, errors.ErrUnsupported)
 }

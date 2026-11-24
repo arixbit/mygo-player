@@ -54,7 +54,7 @@ func main() {
 	flag.Var(headers, "header", "Custom HTTP header 'Key: Value' (repeatable)")
 	ua := flag.String("ua", "", "Custom HTTP User-Agent")
 	ref := flag.String("referer", "", "Custom HTTP Referer")
-	hwdec := flag.String("hwdec", string(player.HWDecAutoSafe), "Hardware decoding mode: auto-safe, videotoolbox, videotoolbox-copy, no")
+	hwdec := flag.String("hwdec", "", "Hardware decoding mode (empty = platform default: auto-safe on macOS, auto-copy on Windows)")
 	subPath := flag.String("sub", "", "External subtitle file (.srt, .ass, .vtt) to load with media")
 	libPath := flag.String("libmpv", "", "Explicit path to libmpv dynamic library (optional, overrides MYGO_NATIVE_MPV)")
 	logLevel := flag.String("log", "", "libmpv log level (e.g. warn, info, v)")
@@ -349,9 +349,11 @@ func (a *demoApp) view(c *ui.Context) {
 						label string
 						mode  player.HWDecMode
 					}{
-						{"Auto Safe (VideoToolbox)", player.HWDecAutoSafe},
+						{"Auto Safe (Zero-Copy / macOS)", player.HWDecAutoSafe},
+						{"Auto Copy (Windows / Copy-Back)", player.HWDecAutoCopy},
 						{"VideoToolbox (Zero-Copy)", player.HWDecVideoToolbox},
 						{"VideoToolbox (Copy-Back)", player.HWDecVideoToolboxCopy},
+						{"D3D11VA (Windows Copy-Back)", player.HWDecD3D11VACopy},
 						{"Software (Disabled)", player.HWDecNone},
 					}
 					for _, item := range modes {
