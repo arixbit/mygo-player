@@ -39,6 +39,7 @@ const (
 type mediaPlayer interface {
 	Snapshot() player.Snapshot
 	Open(target string, opts ...player.OpenOptions) error
+	Pause() error
 	TogglePause() error
 	Seek(pos time.Duration) error
 	SeekRelative(delta time.Duration) error
@@ -68,6 +69,7 @@ type demoApp struct {
 	recent  string // local file to add to Open Recent once it plays
 
 	lastActivity time.Time // last pointer movement or key press
+	lastNow      time.Time // c.Now() from the last frame (keeps tests on Tester's clock)
 	lastTouch    bool      // the last pointer input came from a finger
 	chromeShown  bool      // whether the last frame showed the controls
 	hudHot       bool      // pointer or keyboard focus in the control bar
@@ -87,6 +89,17 @@ type demoApp struct {
 	subWant      bool      // subtitles on or off as last asked for
 	subHoldUntil time.Time // show subWant until then (after subPending)
 	subPending   int       // subtitle commands queued or running
+
+	// clickUndo records that the last click on the picture toggled playback
+	// on clickUndoGen, so an immediately following double click can undo it.
+	// The pointed-to bool is written and read only by the FIFO worker so an
+	// undo runs only if the first click actually toggled playback.
+	// hitClickDone records that the preceding click actually completed on
+	// the picture (not a menu dismissal or canceled press).
+	hitClickDone bool
+	clickUndo    *bool
+	clickUndoGen int
+	onFullScreen func() // test hook; nil in production
 
 	lastSubID int64 // subtitle track to bring back when subtitles are turned on
 	lastSpeed float64
@@ -224,14 +237,24 @@ func (a *demoApp) poke(now time.Time) {
 	}
 }
 
+// now returns the current UI time: wall clock in a real window, or the last
+// frame's clock in headless tests (Tester advances its own clock).
+func (a *demoApp) now() time.Time {
+	if a.win == nil && !a.lastNow.IsZero() {
+		return a.lastNow
+	}
+	return time.Now()
+}
+
 // open plays target, with subtitle files to attach. UI thread only.
 func (a *demoApp) open(target string, subs []string) {
 	a.openGen++
 	gen := a.openGen
 	a.target, a.opening = target, true
+	a.hitClickDone, a.clickUndo = false, nil
 	a.scrubbing, a.holdUntil, a.volHoldUntil, a.subHoldUntil = false, time.Time{}, time.Time{}, time.Time{}
 	a.lastSubID = 0
-	a.lastActivity = time.Now()
+	a.lastActivity = a.now()
 	a.recent = ""
 	if isLocalFile(target) && a.win != nil {
 		a.recent = target // recorded once it plays: a file that fails is no recent document
@@ -339,7 +362,52 @@ func (a *demoApp) hasMedia(s player.Snapshot) bool {
 func seekable(s player.Snapshot) bool { return s.Seekable && s.Duration > 0 }
 
 func (a *demoApp) togglePlay() {
+	a.hitClickDone, a.clickUndo = false, nil
 	a.run("", a.p.TogglePause, nil)
+}
+
+// pictureToggle plays or pauses immediately on a click on the picture and
+// arms clickUndo so a double click can undo it. Ended media is left alone
+// (both now and when the queued command runs): rewinding to 0:00 cannot be
+// undone cleanly if the click turns out to be the first half of a double
+// click leaving full screen (Replay and Space remain).
+func (a *demoApp) pictureToggle() {
+	s := a.p.Snapshot()
+	if !a.opening && (s.EOF || s.State == player.StateEnded) {
+		a.hitClickDone, a.clickUndo = true, nil
+		return
+	}
+	var toggled bool
+	a.hitClickDone, a.clickUndo, a.clickUndoGen = true, &toggled, a.openGen
+	a.run("", func() error {
+		s := a.p.Snapshot()
+		if s.EOF || s.State == player.StateEnded {
+			return nil
+		}
+		toggled = true
+		return a.p.TogglePause()
+	}, nil)
+}
+
+// undoPictureToggle undoes the playback toggle made by the first click of a
+// double click, if that click actually toggled playback.
+func (a *demoApp) undoPictureToggle() {
+	toggled := a.clickUndo
+	a.clickUndo = nil
+	if toggled == nil {
+		return
+	}
+	a.run("", func() error {
+		if !*toggled {
+			return nil
+		}
+		// If playback reached EOF during the brief play between the two
+		// clicks, pause rather than replay from 0:00.
+		if s := a.p.Snapshot(); s.EOF || s.State == player.StateEnded {
+			return a.p.Pause()
+		}
+		return a.p.TogglePause()
+	}, nil)
 }
 
 func (a *demoApp) skip(s player.Snapshot, d time.Duration) {
@@ -420,7 +488,7 @@ func (a *demoApp) runSubtitles(on bool, now time.Time, fn func() error) {
 		err := fn()
 		a.post(func() {
 			a.subPending--
-			a.subHoldUntil = time.Now().Add(subtitleHold)
+			a.subHoldUntil = a.now().Add(subtitleHold)
 		})
 		return err
 	}, nil)
@@ -470,6 +538,9 @@ func (a *demoApp) fullScreen() bool { return a.win != nil && a.win.IsFullScreen(
 func (a *demoApp) toggleFullScreen() {
 	if a.win != nil {
 		a.win.ToggleFullScreen()
+	}
+	if a.onFullScreen != nil {
+		a.onFullScreen()
 	}
 }
 

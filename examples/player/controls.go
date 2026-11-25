@@ -429,7 +429,8 @@ func (a *demoApp) audioItems(m *ui.Menu, audio []player.Track, names []string) {
 }
 
 func (a *demoApp) subtitleMenu(c *ui.Context, s player.Snapshot, subs []player.Track, l layout) {
-	on := a.subtitlesShown(s, time.Now())
+	now := c.Now()
+	on := a.subtitlesShown(s, now)
 	icon := iconSubtitlesOff
 	if on {
 		icon = iconSubtitlesOn
@@ -439,11 +440,11 @@ func (a *demoApp) subtitleMenu(c *ui.Context, s player.Snapshot, subs []player.T
 	b.PopoverMenuButton(func(m *ui.Menu) {
 		if len(subs) > 0 {
 			if m.Item("Off").ID("sid-off").Checked(!on).Chosen() && on {
-				a.toggleSubtitles(s, time.Now())
+				a.toggleSubtitles(s, now)
 			}
 			for i, tr := range subs {
 				if m.Item(names[i]).ID(fmt.Sprintf("sid-%d", tr.ID)).Checked(on && tr.Selected).Chosen() {
-					a.selectSubtitles(tr.ID, time.Now())
+					a.selectSubtitles(tr.ID, now)
 				}
 			}
 			m.Separator()

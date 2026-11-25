@@ -61,6 +61,7 @@ func (l layout) fits(w float32) bool { return l.panelW >= w*l.button/36 }
 
 func (a *demoApp) view(c *ui.Context) {
 	now := c.Now()
+	a.lastNow = now
 	snap := a.p.Snapshot()
 	a.syncWindow(snap)
 	for _, t := range a.pending {
@@ -76,7 +77,14 @@ func (a *demoApp) view(c *ui.Context) {
 	root := ui.Box(c.Key("stage")).Fill()
 	root.HandleInput(func(ev ui.InputEvent) bool {
 		switch ev.Kind {
-		case ui.InputPointerMove, ui.InputPointerDown, ui.InputScroll:
+		case ui.InputPointerMove, ui.InputScroll:
+			a.lastTouch = ev.Pointer == ui.PointerTouch
+			if !a.lastTouch {
+				wake := !a.chromeShown
+				a.poke(ev.Time)
+				return wake
+			}
+		case ui.InputPointerDown:
 			a.lastTouch = ev.Pointer == ui.PointerTouch
 			if !a.lastTouch {
 				a.poke(ev.Time)
@@ -128,7 +136,7 @@ func (a *demoApp) view(c *ui.Context) {
 		ui.Box(c.Key("cover")).Absolute().Fill().Background(bg).IgnoreInput(true).
 			AnimatePose(ui.Pose{Fade: cover}, motionStage)
 
-		a.hitLayer(c, has, chrome, now)
+		a.hitLayer(c, has, chrome, l)
 		a.liftSubtitles(c, root, snap, has, chrome, l)
 
 		// Things in the middle of the stage.
@@ -211,29 +219,70 @@ func (a *demoApp) shortcuts(c *ui.Context, s player.Snapshot, has bool, now time
 	}
 }
 
-// hitLayer takes clicks on the picture. As in QuickTime Player, a click
-// does nothing to playback (the pointer moving already brings the controls
-// back) and a double click toggles full screen, so the two never get in
-// each other's way. With touch, a tap shows or hides the controls.
-func (a *demoApp) hitLayer(c *ui.Context, has, chrome bool, now time.Time) {
+// hitLayer takes pointer input on the picture. A click plays or pauses at
+// once; a double click undoes that toggle and toggles full screen (like
+// YouTube). Clicking while a menu is open only dismisses the menu. With
+// touch, a tap shows or hides the controls.
+func (a *demoApp) hitLayer(c *ui.Context, has, chrome bool, l layout) {
 	hit := ui.Box(c.Key("hit")).Absolute().Fill().AccessHidden(true)
 	if !has {
+		a.hitClickDone, a.clickUndo = false, nil
 		return
 	}
 	if !chrome && c.Preferences().Hover() {
 		hit.Cursor(ui.CursorNone) // out of the picture's way with the controls
 	}
-	double, click := hit.DoubleClicked(), hit.Clicked()
-	switch {
-	case double && !a.lastTouch:
-		a.toggleFullScreen()
-	case click && a.lastTouch:
-		if chrome {
-			a.lastActivity = time.Time{}
-		} else {
-			a.lastActivity = now
+	hit.HandleInput(func(ev ui.InputEvent) bool {
+		switch ev.Kind {
+		case ui.InputPointerMove, ui.InputScroll:
+			a.lastTouch = ev.Pointer == ui.PointerTouch
+			if !a.lastTouch {
+				wake := !a.chromeShown
+				a.poke(ev.Time)
+				return wake
+			}
+			return false
+		case ui.InputPointerDown:
+			a.lastTouch = ev.Pointer == ui.PointerTouch
+			if !a.lastTouch {
+				a.poke(ev.Time)
+			}
+			if ev.Button != 0 || a.anyMenuOpen() {
+				a.hitClickDone, a.clickUndo = false, nil
+				return false
+			}
+			return true
+		case ui.InputPointerUp:
+			if ev.Button != 0 {
+				return false
+			}
+			inside := ev.X >= 0 && ev.Y >= 0 && ev.X <= l.w && ev.Y <= l.h
+			if ev.Canceled || !inside {
+				a.hitClickDone, a.clickUndo = false, nil
+				return true
+			}
+			if ev.Pointer == ui.PointerTouch {
+				if a.chromeShown {
+					a.lastActivity = time.Time{}
+				} else {
+					a.lastActivity = ev.Time
+				}
+				return true
+			}
+			a.lastActivity = ev.Time
+			if ev.Clicks > 1 && a.hitClickDone {
+				a.hitClickDone = false
+				if a.clickUndo != nil && a.clickUndoGen == a.openGen {
+					a.undoPictureToggle()
+				}
+				a.toggleFullScreen()
+				return true
+			}
+			a.pictureToggle()
+			return true
 		}
-	}
+		return false
+	})
 }
 
 // liftSubtitles moves subtitles up out of the way of the control bar while

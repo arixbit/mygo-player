@@ -64,6 +64,14 @@ func (f *fakePlayer) Open(target string, opts ...player.OpenOptions) error {
 	return nil
 }
 
+func (f *fakePlayer) Pause() error {
+	f.snap.Paused = true
+	if !f.snap.EOF {
+		f.snap.State = player.StatePaused
+	}
+	return nil
+}
+
 func (f *fakePlayer) TogglePause() error {
 	if f.snap.EOF || f.snap.State == player.StateEnded {
 		f.snap.EOF, f.snap.Position, f.snap.Paused, f.snap.State = false, 0, false, player.StatePlaying
@@ -481,30 +489,177 @@ func TestFormatting(t *testing.T) {
 
 func itoa(n int) string { return strconv.Itoa(n) }
 
-func TestClicksOnThePictureLeavePlaybackAlone(t *testing.T) {
+func TestPictureClickPausesImmediatelyAndDoubleClickUndoes(t *testing.T) {
 	a, f, tt := newTestApp(t, 960, 600)
+	fsCount := 0
+	a.onFullScreen = func() { fsCount++ }
 	a.open("/movies/movie.mkv", nil)
 	tt.Frame()
+
+	// Single click pauses immediately (zero wait) without toggling full screen.
 	tt.ClickAt(480, 200)
-	tt.Advance(time.Second)
-	if f.snap.Paused {
-		t.Fatal("a single click on the picture changed playback")
+	if !f.snap.Paused || fsCount != 0 {
+		t.Fatalf("single click on playing video: paused=%v fs=%d, want true/0", f.snap.Paused, fsCount)
 	}
-	// A double click toggles full screen only, also at the end.
+	tt.Advance(time.Second) // past double-click interval
+	// Another single click resumes immediately.
 	tt.ClickAt(480, 200)
-	tt.ClickAt(480, 200)
-	tt.Advance(time.Second)
-	if f.snap.Paused {
-		t.Fatal("a double click paused playback")
+	if f.snap.Paused || fsCount != 0 {
+		t.Fatalf("single click on paused video: paused=%v fs=%d, want false/0", f.snap.Paused, fsCount)
 	}
+
+	// Fast double click on playing video: pauses on click 1, undoes on click 2 + toggles full screen.
+	tt.Advance(time.Second)
+	tt.ClickAt(480, 200)
+	if !f.snap.Paused {
+		t.Fatal("first click of double click should pause immediately")
+	}
+	tt.ClickAt(480, 200)
+	if f.snap.Paused || fsCount != 1 {
+		t.Fatalf("fast double click on playing video: paused=%v fs=%d, want false/1", f.snap.Paused, fsCount)
+	}
+
+	// Slower double click (300ms apart, still within OS double-click interval) on playing video.
+	tt.Advance(time.Second)
+	tt.ClickAt(480, 200)
+	if !f.snap.Paused {
+		t.Fatal("first click of 300ms double click should pause immediately")
+	}
+	tt.Advance(300 * time.Millisecond)
+	tt.ClickAt(480, 200)
+	if f.snap.Paused || fsCount != 2 {
+		t.Fatalf("300ms double click on playing video: paused=%v fs=%d, want false/2", f.snap.Paused, fsCount)
+	}
+
+	// Double click on paused video: resumes on click 1, undoes back to paused on click 2 + toggles full screen.
+	tt.Advance(time.Second)
+	tt.ClickAt(480, 200) // now paused
+	tt.Advance(time.Second)
+	tt.ClickAt(480, 200)
+	if f.snap.Paused {
+		t.Fatal("first click on paused video should play immediately")
+	}
+	tt.Advance(150 * time.Millisecond)
+	tt.ClickAt(480, 200)
+	if !f.snap.Paused || fsCount != 3 {
+		t.Fatalf("double click on paused video: paused=%v fs=%d, want true/3", f.snap.Paused, fsCount)
+	}
+
+	// Double click at EOF: toggles full screen and leaves the movie ended at 90s.
 	f.snap.EOF, f.snap.State, f.snap.Position = true, player.StateEnded, 90*time.Second
 	tt.Frame()
 	tt.Advance(time.Second)
 	tt.ClickAt(480, 200)
+	tt.Advance(150 * time.Millisecond)
 	tt.ClickAt(480, 200)
+	if !f.snap.EOF || f.snap.Position != 90*time.Second || fsCount != 4 {
+		t.Fatalf("double click at EOF: eof=%v pos=%v fs=%d, want true/90s/4", f.snap.EOF, f.snap.Position, fsCount)
+	}
+
+	// Two quick clicks at distant points are independent clicks (pause, then play), not a double click.
+	a.open("/movies/movie2.mkv", nil)
+	tt.Frame()
 	tt.Advance(time.Second)
-	if !f.snap.EOF || f.snap.Position != 90*time.Second {
-		t.Fatal("a double click at the end replayed the video")
+	tt.ClickAt(200, 200)
+	tt.Advance(50 * time.Millisecond)
+	tt.ClickAt(700, 200)
+	if f.snap.Paused || fsCount != 4 {
+		t.Fatalf("distant quick clicks: paused=%v fs=%d, want false/4", f.snap.Paused, fsCount)
+	}
+
+	// Canceled second press must not undo click 1, toggle full screen, or poison the next click.
+	tt.Advance(time.Second)
+	tt.ClickAt(480, 200) // paused
+	tt.Advance(100 * time.Millisecond)
+	tt.Press(480, 200)
+	tt.CancelPress()
+	if !f.snap.Paused || fsCount != 4 {
+		t.Fatalf("canceled second press: paused=%v fs=%d, want true/4", f.snap.Paused, fsCount)
+	}
+	tt.Advance(100 * time.Millisecond)
+	tt.ClickAt(480, 200) // genuine click -> plays
+	if f.snap.Paused || fsCount != 4 {
+		t.Fatalf("click after canceled press: paused=%v fs=%d, want false/4", f.snap.Paused, fsCount)
+	}
+
+	// Opening a new movie after click 1 clears undo state so click 2 doesn't corrupt the new movie.
+	tt.Advance(time.Second)
+	tt.ClickAt(480, 200) // pauses movie2
+	tt.Advance(80 * time.Millisecond)
+	a.open("/movies/movie3.mkv", nil)
+	tt.Frame()
+	tt.Advance(80 * time.Millisecond)
+	tt.ClickAt(480, 200) // fresh single click on movie3 -> pauses movie3, no fullscreen
+	if !f.snap.Paused || fsCount != 4 {
+		t.Fatalf("click on newly opened movie: paused=%v fs=%d, want true/4", f.snap.Paused, fsCount)
+	}
+
+	// Clicking the picture once, opening a menu, dismissing it by clicking the
+	// picture, then quickly clicking the same spot must not arm fullscreen from
+	// the stale pre-menu click.
+	a.open("/movies/movie4.mkv", nil)
+	tt.Frame()
+	tt.ClickAt(480, 200) // pauses and sets hitClickDone=true
+	if err := tt.Click("Subtitles"); err != nil {
+		t.Fatal(err)
+	}
+	if !a.subOpen {
+		t.Fatal("subtitles menu did not open")
+	}
+	tt.ClickAt(480, 200) // dismiss menu only (must clear stale hitClickDone too)
+	if !f.snap.Paused || a.subOpen || fsCount != 4 {
+		t.Fatalf("click to dismiss menu: paused=%v subOpen=%v fs=%d, want true/false/4", f.snap.Paused, a.subOpen, fsCount)
+	}
+	tt.Advance(150 * time.Millisecond)
+	tt.ClickAt(480, 200) // fresh single click -> resumes, must NOT toggle fullscreen
+	if f.snap.Paused || fsCount != 4 {
+		t.Fatalf("click right after menu dismiss: paused=%v fs=%d, want false/4", f.snap.Paused, fsCount)
+	}
+
+	// Touch tap toggles chrome without pausing playback.
+	a.open("/movies/movie5.mkv", nil)
+	tt.Frame()
+	tt.UsePointer(ui.PointerTouch, 0.5)
+	tt.ClickAt(480, 200)
+	if f.snap.Paused || a.chromeShown {
+		t.Fatalf("touch tap while controls shown: paused=%v chrome=%v, want false/false", f.snap.Paused, a.chromeShown)
+	}
+	tt.Advance(time.Second)
+	tt.ClickAt(480, 200)
+	if f.snap.Paused || !a.chromeShown {
+		t.Fatalf("touch tap while controls hidden: paused=%v chrome=%v, want false/true", f.snap.Paused, a.chromeShown)
+	}
+	tt.UsePointer(ui.PointerMouse, 0.5)
+
+	// Double click while the worker queue is held still preserves playing state after draining.
+	a.open("/movies/movie6.mkv", nil)
+	tt.Frame()
+	q, release, drain := heldQueue()
+	a.cmds = q
+	tt.Advance(time.Second)
+	tt.ClickAt(480, 200)
+	tt.Advance(120 * time.Millisecond)
+	tt.ClickAt(480, 200)
+	release()
+	drain()
+	if f.snap.Paused || fsCount != 5 {
+		t.Fatalf("double click with busy worker: paused=%v fs=%d, want false/5", f.snap.Paused, fsCount)
+	}
+
+	// If playback reaches EOF while a queued picture double click is waiting on
+	// the worker, neither click may rewind the movie to 0:00.
+	q2, release2, drain2 := heldQueue()
+	a.cmds = q2
+	tt.Advance(time.Second)
+	tt.ClickAt(480, 200)
+	tt.Advance(120 * time.Millisecond)
+	tt.ClickAt(480, 200)
+	// Media reaches EOF before the queued picture clicks run.
+	f.snap.EOF, f.snap.State, f.snap.Position = true, player.StateEnded, 90*time.Second
+	release2()
+	drain2()
+	if !f.snap.EOF || f.snap.Position != 90*time.Second || fsCount != 6 {
+		t.Fatalf("queued double click hitting EOF: eof=%v pos=%v fs=%d, want true/90s/6", f.snap.EOF, f.snap.Position, fsCount)
 	}
 }
 

@@ -100,12 +100,12 @@ MYGO_NATIVE_MPV=/path/to/libmpv.dylib CGO_ENABLED=0 go run ./examples/player \
 The example is a complete, minimal player: drop a video (or choose one with `Cmd+O` / `Ctrl+O`, or "Open With" from Finder/Explorer) and it plays. Matching subtitle files next to the video load automatically, and dropping subtitle files on a playing video adds them. The control bar hides with the cursor after a moment of playback and comes back on any movement; subtitles move up out of its way while it shows. Menus only appear when they offer a choice (the audio menu needs two or more tracks), narrow windows fold what doesn't fit into the More (⋯) menu, tracks are named in plain language ("Japanese · Commentary"), errors show as toasts or as a card with a way forward, and every transition respects the system's Reduce Motion setting.
 
 Keyboard shortcuts in `examples/player` (shown in each control's tooltip):
-- `Space` / `K`: Play / Pause (replays at the end)
+- `Space` / `K`: Play / Pause (replays at the end); clicking the picture plays or pauses immediately
 - `Left` / `Right`: Back / forward 5 seconds
 - `Up` / `Down`: Volume up / down (turning it up unmutes)
 - `M`: Mute / Unmute
 - `C`: Subtitles off / back on
-- `F`, or a double click on the picture: Full screen (`Esc` leaves it)
+- `F`, or a double click on the picture: Full screen (`Esc` leaves it; undoes the first click's pause/play)
 - `Cmd+O` (macOS) / `Ctrl+O` (Windows & Linux): Choose a video
 
 ## Audio Tracks, Subtitles & Online Streams (Custom Headers)
