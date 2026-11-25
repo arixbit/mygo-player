@@ -80,7 +80,17 @@ jobs:
         run: go test -v ./...
 
   test-windows:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: amd64
+            runner: windows-latest
+            ffmpeg_zip: ffmpeg-master-latest-win64-gpl.zip
+          - goarch: arm64
+            runner: windows-11-arm
+            ffmpeg_zip: ffmpeg-master-latest-winarm64-gpl.zip
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -102,7 +112,7 @@ jobs:
         run: |
           $zip = Join-Path $env:RUNNER_TEMP "ffmpeg.zip"
           $dir = Join-Path $env:RUNNER_TEMP "ffmpeg"
-          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile $zip
+          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/${{ matrix.ffmpeg_zip }}" -OutFile $zip
           Expand-Archive -Path $zip -DestinationPath $dir -Force
           $bin = (Get-ChildItem -Path $dir -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1).DirectoryName
           if (-not $bin) { throw "ffmpeg.exe not found after extraction" }
@@ -112,9 +122,5 @@ jobs:
         shell: pwsh
         env:
           CGO_ENABLED: "0"
-        run: |
-          $manifest = Get-Content mygo-plugin.json -Raw | ConvertFrom-Json
-          if ($manifest.libraries[0].files.'windows-amd64') {
-            $env:MYGO_REQUIRE_LIBMPV = "1"
-          }
-          go test -v ./...
+          MYGO_REQUIRE_LIBMPV: "1"
+        run: go test -v ./...

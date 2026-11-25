@@ -29,6 +29,7 @@ MyGo's built-in `ui/video` wraps each OS's media framework (AVFoundation, Media 
 | `darwin-arm64` | Zero-copy GPU (`IOSurface` -> Metal `*native.Texture`) | `auto-safe` (VideoToolbox) | CoreAudio | Published (`scripts/build-libmpv-macos.sh`) |
 | `darwin-amd64` | Zero-copy GPU (`IOSurface` -> Metal `*native.Texture`) | `auto-safe` (VideoToolbox) | CoreAudio | Published (`scripts/build-libmpv-macos.sh`) |
 | `windows-amd64` | Double-buffered `*ui.Bitmap` (`MPV_RENDER_API_TYPE_SW`, no child HWND occlusion) | `auto-copy` (D3D11VA) | WASAPI | Published (`scripts/build-libmpv-windows.sh`) |
+| `windows-arm64` | Double-buffered `*ui.Bitmap` (`MPV_RENDER_API_TYPE_SW`, no child HWND occlusion) | `auto-copy` (D3D11VA) | WASAPI | Published (`scripts/build-libmpv-windows.sh`) |
 | `linux-amd64` | Double-buffered `*ui.Bitmap` (`MPV_RENDER_API_TYPE_SW`) | `auto-copy` (VA-API / SW fallback) | PulseAudio (incl. `pipewire-pulse`) / ALSA | Published (`scripts/build-libmpv-linux.sh`) |
 | `linux-arm64` | Double-buffered `*ui.Bitmap` (`MPV_RENDER_API_TYPE_SW`) | `auto-copy` (copy-back / SW fallback) | PulseAudio (incl. `pipewire-pulse`) / ALSA | Published (`scripts/build-libmpv-linux.sh`) |
 
@@ -207,9 +208,9 @@ CGO_ENABLED=0 MYGO_REQUIRE_LIBMPV=1 go test -v ./...
 
 To build self-contained LGPL-2.1+ libraries locally or via GitHub Actions:
 - **macOS:** `./scripts/build-libmpv-macos.sh arm64 dist/libmpv-darwin-arm64.dylib`
-- **Windows (MSYS2 UCRT64):** `./scripts/build-libmpv-windows.sh amd64 dist/mpv-2.dll`
+- **Windows:** `./scripts/build-libmpv-windows.sh amd64 dist/mpv-2-windows-amd64.dll` (MSYS2 UCRT64) or `./scripts/build-libmpv-windows.sh arm64 dist/mpv-2-windows-arm64.dll` (MSYS2 CLANGARM64)
 - **Linux:** `./scripts/build-libmpv-linux.sh amd64 dist/libmpv-linux-amd64.so`
-- **GitHub Actions:** `.github/workflows/build-libmpv.yml` builds `darwin-arm64`, `darwin-amd64`, `windows-amd64`, `linux-amd64`, and `linux-arm64` LGPL-2.1+ libraries, checks shared-library dependencies, runs zero-cgo Go integration tests, publishes SHA-256 assets to GitHub Releases, and updates `mygo-plugin.json`.
+- **GitHub Actions:** `.github/workflows/build-libmpv.yml` builds `darwin-arm64`, `darwin-amd64`, `windows-amd64`, `windows-arm64`, `linux-amd64`, and `linux-arm64` LGPL-2.1+ libraries, checks shared-library dependencies, runs zero-cgo Go integration tests, publishes SHA-256 assets to GitHub Releases, and updates `mygo-plugin.json`.
 
 ## License
 

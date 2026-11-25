@@ -29,6 +29,7 @@ MyGo 内置的 `ui/video` 直接调用各操作系统的原生媒体框架（AVF
 | `darwin-arm64` | 零拷贝 GPU 渲染（`IOSurface` -> Metal `*native.Texture`） | `auto-safe`（VideoToolbox） | CoreAudio | 已发布（`scripts/build-libmpv-macos.sh`） |
 | `darwin-amd64` | 零拷贝 GPU 渲染（`IOSurface` -> Metal `*native.Texture`） | `auto-safe`（VideoToolbox） | CoreAudio | 已发布（`scripts/build-libmpv-macos.sh`） |
 | `windows-amd64` | 双缓冲 `*ui.Bitmap` 图层合成（`MPV_RENDER_API_TYPE_SW`，无子窗口 HWND 遮挡） | `auto-copy`（D3D11VA） | WASAPI | 已发布（`scripts/build-libmpv-windows.sh`） |
+| `windows-arm64` | 双缓冲 `*ui.Bitmap` 图层合成（`MPV_RENDER_API_TYPE_SW`，无子窗口 HWND 遮挡） | `auto-copy`（D3D11VA） | WASAPI | 已发布（`scripts/build-libmpv-windows.sh`） |
 | `linux-amd64` | 双缓冲 `*ui.Bitmap` 图层合成（`MPV_RENDER_API_TYPE_SW`） | `auto-copy`（VA-API / 自动回退软解） | PulseAudio（兼容 `pipewire-pulse`）/ ALSA | 已发布（`scripts/build-libmpv-linux.sh`） |
 | `linux-arm64` | 双缓冲 `*ui.Bitmap` 图层合成（`MPV_RENDER_API_TYPE_SW`） | `auto-copy`（回读硬解 / 自动回退软解） | PulseAudio（兼容 `pipewire-pulse`）/ ALSA | 已发布（`scripts/build-libmpv-linux.sh`） |
 
@@ -207,9 +208,9 @@ CGO_ENABLED=0 MYGO_REQUIRE_LIBMPV=1 go test -v ./...
 
 如需在本地或 GitHub Actions 中构建自包含的 LGPL-2.1+ 动态库：
 - **macOS**：`./scripts/build-libmpv-macos.sh arm64 dist/libmpv-darwin-arm64.dylib`
-- **Windows（MSYS2 UCRT64）**：`./scripts/build-libmpv-windows.sh amd64 dist/mpv-2.dll`
+- **Windows**：`./scripts/build-libmpv-windows.sh amd64 dist/mpv-2-windows-amd64.dll`（MSYS2 UCRT64）或 `./scripts/build-libmpv-windows.sh arm64 dist/mpv-2-windows-arm64.dll`（MSYS2 CLANGARM64）
 - **Linux**：`./scripts/build-libmpv-linux.sh amd64 dist/libmpv-linux-amd64.so`
-- **GitHub Actions**：`.github/workflows/build-libmpv.yml` 自动构建 `darwin-arm64`、`darwin-amd64`、`windows-amd64`、`linux-amd64` 和 `linux-arm64` 的 LGPL-2.1+ 动态库，校验动态依赖纯净性，运行零 cgo 的 Go 集成测试，上传带 SHA-256 校验的 Release 资源并更新 `mygo-plugin.json`。
+- **GitHub Actions**：`.github/workflows/build-libmpv.yml` 自动构建 `darwin-arm64`、`darwin-amd64`、`windows-amd64`、`windows-arm64`、`linux-amd64` 和 `linux-arm64` 的 LGPL-2.1+ 动态库，校验动态依赖纯净性，运行零 cgo 的 Go 集成测试，上传带 SHA-256 校验的 Release 资源并更新 `mygo-plugin.json`。
 
 ## 许可证
 

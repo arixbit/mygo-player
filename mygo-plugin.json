@@ -28,6 +28,11 @@
           "name": "mpv-2.dll",
           "url": "https://github.com/arixbit/mygo-player/releases/download/native-mpv/mpv-2-windows-amd64-fc039cbee47a.dll",
           "sha256": "fc039cbee47aa81e3ddde0188e56ae6e2b1218c7c9394395ea9d950776e7c12b"
+        },
+        "windows-arm64": {
+          "name": "mpv-2.dll",
+          "url": "https://github.com/arixbit/mygo-player/releases/download/native-mpv/mpv-2-windows-arm64-346d36a1e2da.dll",
+          "sha256": "346d36a1e2da3244267529da9241fa81abc078bfbd3a98b1a94c5b65e54efdf5"
         }
       }
     }
