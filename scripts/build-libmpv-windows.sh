@@ -294,10 +294,11 @@ if [[ "$ARCH" == "aarch64" ]]; then
     STATIC_CPP_TOKENS+=",-lwinpthread"
     STATIC_RUNTIME_ARGS+=",'-lwinpthread'"
   fi
-  STATIC_CPP_TOKENS+=",-Bdynamic"
 
   # Ensure C++ static archives (libplacebo, harfbuzz) pull static libc++/libunwind
-  # even when meson appends Libs.private after our explicit link args.
+  # even when meson appends Libs.private after our explicit link args. Leaving
+  # -Wl,-Bstatic active ensures LLD only links static .a archives (and MinGW's
+  # lib*.a system import libs) and never picks up MSYS2 *.dll.a runtime shims.
   if [[ -f "$PREFIX_POSIX/lib/pkgconfig/libplacebo.pc" ]] && ! grep -qE -- '(-lc\+\+|-lstdc\+\+)' "$PREFIX_POSIX/lib/pkgconfig/libplacebo.pc"; then
     sed -i 's|^Libs\.private:|Libs.private: -lc++ |' "$PREFIX_POSIX/lib/pkgconfig/libplacebo.pc"
   fi
@@ -305,12 +306,14 @@ if [[ "$ARCH" == "aarch64" ]]; then
     [[ -f "$pc" ]] || continue
     sed -i -E \
       -e "s/(^|[[:space:]])-l(c\+\+|stdc\+\+)([[:space:]]|$)/\\1${STATIC_CPP_TOKENS}\\3/g" \
-      -e "s/(^|[[:space:]])-lunwind([[:space:]]|$)/\\1-Wl,-Bstatic,-lunwind,-Bdynamic\\2/g" \
-      -e "s/(^|[[:space:]])-lwinpthread([[:space:]]|$)/\\1-Wl,-Bstatic,-lwinpthread,-Bdynamic\\2/g" \
+      -e "s/(^|[[:space:]])-lunwind([[:space:]]|$)/\\1-Wl,-Bstatic,-lunwind\\2/g" \
+      -e "s/(^|[[:space:]])-lwinpthread([[:space:]]|$)/\\1-Wl,-Bstatic,-lwinpthread\\2/g" \
       "$pc"
   done
 
-  MPV_LINK_ARGS="['-L${PREFIX_WIN}/lib','-static-libgcc',${STATIC_RUNTIME_ARGS},'-Wl,-Bdynamic','-Wl,--exclude-libs,ALL']"
+  # Note: LLD for PE/COFF (MinGW) does not support GNU ld's --exclude-libs;
+  # mpv already restricts DLL exports via its generated .def file.
+  MPV_LINK_ARGS="['-L${PREFIX_WIN}/lib','-static-libgcc',${STATIC_RUNTIME_ARGS}]"
 else
   MPV_LINK_ARGS="['-L${PREFIX_WIN}/lib','-static','-static-libgcc','-static-libstdc++','-Wl,-Bstatic','-lstdc++','-lwinpthread','-Wl,-Bdynamic','-Wl,--exclude-libs,ALL']"
 fi
@@ -400,7 +403,7 @@ fi
 
 echo "==> Verifying exported libmpv symbols:"
 for sym in mpv_create mpv_initialize mpv_command mpv_render_context_create mpv_render_context_render mpv_render_context_set_update_callback mpv_terminate_destroy; do
-  if ! grep -qE "[[:space:]]${sym}[[:space:]]*$" <<< "$OBJDUMP_P"; then
+  if ! grep -qE "[[:space:]]${sym}([[:space:]]|$)" <<< "$OBJDUMP_P"; then
     echo "ERROR: missing required exported symbol ${sym}" >&2
     exit 1
   fi
