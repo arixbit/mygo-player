@@ -267,3 +267,47 @@ func TestTuningFrameStepAndBackStep(t *testing.T) {
 	}
 	t.Logf("frame positions: start=%v step=%v back=%v", p0, p1, p.Snapshot().Position)
 }
+
+func TestToggleMute(t *testing.T) {
+	requireLibMPVAndFFmpeg(t)
+	p := newTestPlayer(t, Options{Volume: 40})
+	if err := p.ToggleMute(); err != nil {
+		t.Fatalf("ToggleMute: %v", err)
+	}
+	waitFor(t, 3*time.Second, "muted", func() bool { return p.Snapshot().Muted })
+	if v := p.Snapshot().Volume; v != 40 {
+		t.Fatalf("muting changed the volume to %v", v)
+	}
+	if err := p.ToggleMute(); err != nil {
+		t.Fatalf("ToggleMute: %v", err)
+	}
+	waitFor(t, 3*time.Second, "unmuted at 40", func() bool {
+		s := p.Snapshot()
+		return !s.Muted && s.Volume == 40
+	})
+
+	// Unmuting a silent player restores an audible volume.
+	if err := p.SetVolume(0); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.SetMuted(true); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 3*time.Second, "muted at 0", func() bool {
+		s := p.Snapshot()
+		return s.Muted && s.Volume == 0
+	})
+	if err := p.ToggleMute(); err != nil {
+		t.Fatalf("ToggleMute: %v", err)
+	}
+	waitFor(t, 3*time.Second, "unmuted audible", func() bool {
+		s := p.Snapshot()
+		return !s.Muted && s.Volume == 50
+	})
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.ToggleMute(); !errors.Is(err, ErrClosed) {
+		t.Fatalf("ToggleMute after Close = %v, want ErrClosed", err)
+	}
+}

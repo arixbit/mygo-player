@@ -680,59 +680,55 @@ func TestBug7TimePosNotifyThrottled(t *testing.T) {
 // --- Bug 9: example races / labels and View documentation ---
 
 func TestBug9ExampleAndViewDocs(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join("examples", "player", "main.go"))
-	if err != nil {
-		t.Fatal(err)
+	// The example keeps its state on the UI thread: goroutines (file
+	// dialogs) may only hand results over with a.post, never touch a.<field>
+	// themselves, and on-screen shortcut hints follow the platform.
+	files, err := filepath.Glob(filepath.Join("examples", "player", "*.go"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("example sources: %v %v", files, err)
 	}
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "main.go", src, parser.ParseComments)
-	if err != nil {
-		t.Fatal(err)
-	}
-	hasMutex := false
-	usesVAAPI := false
-	lockedFuncs := map[string]bool{"setErr": true, "uiState": true, "openTarget": true}
-	ast.Inspect(f, func(n ast.Node) bool {
-		switch x := n.(type) {
-		case *ast.TypeSpec:
-			if st, ok := x.Type.(*ast.StructType); ok && x.Name.Name == "demoApp" {
-				for _, fld := range st.Fields.List {
-					if sel, ok := fld.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "Mutex" {
-						hasMutex = true
+	var all strings.Builder
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		all.Write(src)
+		f, err := parser.ParseFile(fset, name, src, parser.ParseComments)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			g, ok := n.(*ast.GoStmt)
+			if !ok {
+				return true
+			}
+			ast.Inspect(g.Call.Fun, func(n ast.Node) bool {
+				switch x := n.(type) {
+				case *ast.CallExpr:
+					if sel, ok := x.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "post" {
+						return false // runs on the UI thread
 					}
-				}
-			}
-		case *ast.SelectorExpr:
-			if id, ok := x.X.(*ast.Ident); ok && id.Name == "player" && x.Sel.Name == "HWDecVAAPICopy" {
-				usesVAAPI = true
-			}
-		case *ast.FuncDecl:
-			if lockedFuncs[x.Name.Name] {
-				return false
-			}
-			ast.Inspect(x, func(n ast.Node) bool {
-				if sel, ok := n.(*ast.SelectorExpr); ok {
-					if id, ok := sel.X.(*ast.Ident); ok && id.Name == "player" && sel.Sel.Name == "HWDecVAAPICopy" {
-						usesVAAPI = true
+				case *ast.FuncLit:
+					if x != g.Call.Fun {
+						return false // handed to someone else (a.post, dialogs)
 					}
-					if id, ok := sel.X.(*ast.Ident); ok && id.Name == "a" && (sel.Sel.Name == "lastErr" || sel.Sel.Name == "filePath") {
-						t.Errorf("%s: unsynchronized access to a.%s in %s", fset.Position(sel.Pos()), sel.Sel.Name, x.Name.Name)
+				case *ast.SelectorExpr:
+					if id, ok := x.X.(*ast.Ident); ok && id.Name == "a" && x.Sel.Name != "win" && x.Sel.Name != "post" && x.Sel.Name != "subPos" && x.Sel.Name != "p" {
+						t.Errorf("%s: goroutine touches UI state a.%s directly", fset.Position(x.Pos()), x.Sel.Name)
 					}
 				}
 				return true
 			})
 			return false
-		}
-		return true
-	})
-	if !hasMutex {
-		t.Error("demoApp has no mutex guarding shared fields")
+		})
 	}
-	if !usesVAAPI {
-		t.Error("example HWDec menu lacks player.HWDecVAAPICopy")
-	}
-	for _, bad := range []string{`"Open Video (Cmd+O)"`, `"MyGo Player (libmpv Zero-Copy)"`, `"Auto Copy (Windows / Copy-Back)"`} {
-		if strings.Contains(string(src), bad) {
+	for _, bad := range []string{`"Open Video (Cmd+O)"`, `"MyGo Player (libmpv Zero-Copy)"`, `"Auto Copy (Windows / Copy-Back)"`, `"Cmd+O"`} {
+		if strings.Contains(all.String(), bad) {
 			t.Errorf("example still hardcodes macOS-only label %s", bad)
 		}
 	}

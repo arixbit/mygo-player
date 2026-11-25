@@ -566,6 +566,22 @@ func (p *Player) SetMuted(muted bool) error {
 	return p.client.SetPropertyFlag("mute", muted)
 }
 
+// ToggleMute mutes or unmutes audio output based on the current state. When
+// unmuting a player whose volume is 0, it also restores an audible volume
+// (50), so that unmuting is never silent.
+func (p *Player) ToggleMute() error {
+	s := p.Snapshot()
+	if s.Muted {
+		if s.Volume <= 0 {
+			if err := p.SetVolume(50); err != nil {
+				return err
+			}
+		}
+		return p.SetMuted(false)
+	}
+	return p.SetMuted(true)
+}
+
 // SetSpeed sets the playback rate multiplier (e.g. 0.5, 1.0, 1.5, 2.0).
 func (p *Player) SetSpeed(rate float64) error {
 	p.cmdMu.Lock()

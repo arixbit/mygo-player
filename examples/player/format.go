@@ -1,0 +1,149 @@
+package main
+
+import (
+	"fmt"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	player "github.com/arixbit/mygo-player"
+)
+
+// formatClock formats a playback time. Times of media an hour or longer
+// always show hours, so the labels keep their width as the clock runs.
+func formatClock(d time.Duration, withHours bool) string {
+	if d < 0 {
+		d = 0
+	}
+	sec := int(d / time.Second)
+	h, m, s := sec/3600, (sec%3600)/60, sec%60
+	if h > 0 || withHours {
+		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
+	}
+	return fmt.Sprintf("%d:%02d", m, s)
+}
+
+// formatRemaining formats the time left, as Apple's players show it at the
+// end of the seek bar.
+func formatRemaining(pos, dur time.Duration) string {
+	left := dur - pos
+	if left < 0 {
+		left = 0
+	}
+	// Round up, so the label reaches 0:00 exactly when playback ends.
+	left = (left + time.Second - 1).Truncate(time.Second)
+	return "-" + formatClock(left, dur >= time.Hour)
+}
+
+// speedLabel formats a playback rate as "1×", "1.25×".
+func speedLabel(rate float64) string {
+	return strconv.FormatFloat(rate, 'f', -1, 64) + "×"
+}
+
+var speeds = []float64{0.5, 0.75, 1, 1.25, 1.5, 2}
+
+func filterByType(tracks []player.Track, kind player.TrackType) []player.Track {
+	var out []player.Track
+	for _, tr := range tracks {
+		if tr.Type == kind {
+			out = append(out, tr)
+		}
+	}
+	return out
+}
+
+// trackNames names tracks for a menu with Track.DisplayName, telling apart
+// tracks that would share a name by their codec, then by their number.
+func trackNames(tracks []player.Track) []string {
+	names := make([]string, len(tracks))
+	count := map[string]int{}
+	for i, tr := range tracks {
+		names[i] = tr.DisplayName()
+		count[names[i]]++
+	}
+	for i, tr := range tracks {
+		if count[names[i]] > 1 && tr.Codec != "" {
+			names[i] += " · " + strings.ToUpper(tr.Codec)
+		}
+	}
+	seen := map[string]int{}
+	for i := range names {
+		seen[names[i]]++
+	}
+	for i, tr := range tracks {
+		if seen[names[i]] > 1 {
+			names[i] += fmt.Sprintf(" · %d", tr.ID)
+		}
+	}
+	return names
+}
+
+var subtitleExts = map[string]bool{
+	".srt": true, ".ass": true, ".ssa": true, ".vtt": true, ".sub": true, ".sup": true, ".idx": true,
+}
+
+// isSubtitleFile reports whether path names a subtitle file by extension.
+func isSubtitleFile(path string) bool {
+	return subtitleExts[strings.ToLower(filepath.Ext(path))]
+}
+
+// splitDropped sorts dropped or opened paths into the first video (anything
+// that is not a subtitle file) and the subtitle files.
+func splitDropped(paths []string) (video string, subs []string) {
+	for _, p := range paths {
+		switch {
+		case isSubtitleFile(p):
+			subs = append(subs, p)
+		case video == "":
+			video = p
+		}
+	}
+	return video, subs
+}
+
+// mediaName is what to call the media: its title when it has one, else its
+// file name (or the last part of its URL).
+func mediaName(title, target string) string {
+	if title != "" {
+		return title
+	}
+	if target == "" {
+		return ""
+	}
+	if i := strings.IndexAny(target, "?#"); i > 0 && strings.Contains(target, "://") {
+		target = target[:i]
+	}
+	if b := filepath.Base(strings.TrimRight(target, "/")); b != "." && b != "/" {
+		return b
+	}
+	return target
+}
+
+// isLocalFile reports whether target is a path rather than a URL.
+func isLocalFile(target string) bool {
+	return target != "" && !strings.Contains(target, "://")
+}
+
+var errorCode = regexp.MustCompile(`\s*\(-?\d+\)$`)
+
+// friendlyError turns a player error into a sentence for people: without
+// the package prefixes and libmpv's error number, capitalized, with a
+// period ("mpv playback: unrecognized file format (-17)" reads "Unrecognized
+// file format.").
+func friendlyError(err error) string {
+	msg := err.Error()
+	for _, p := range []string{"player: ", "mpv playback: ", "mpv: "} {
+		msg = strings.TrimPrefix(msg, p)
+	}
+	msg = strings.TrimSpace(errorCode.ReplaceAllString(msg, ""))
+	if msg == "" {
+		return "Something went wrong."
+	}
+	msg = strings.ToUpper(msg[:1]) + msg[1:]
+	if !strings.HasSuffix(msg, ".") {
+		msg += "."
+	}
+	return msg
+}
