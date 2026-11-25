@@ -214,4 +214,13 @@ CGO_ENABLED=0 MYGO_REQUIRE_LIBMPV=1 go test -v ./...
 ## 许可证
 
 - Go 插件源码、示例与构建脚本采用 **MIT License**（见 [LICENSE](LICENSE)）。
-- 底层 `libmpv` 动态库采用 **LGPL 2.1 或更高版本**（构建时严格排除所有 GPL 与 nonfree 组件）。完整的第三方依赖清单与 LGPL 动态替换指引请参阅 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。
+- 底层 `libmpv` 动态库采用 **LGPL 2.1 或更高版本**（构建时严格排除所有 GPL 与 nonfree 组件）。
+
+### 分发集成 `mygo-player` 的应用（LGPL 2.1 合规说明）
+
+由于使用 `mygo-player` 的桌面应用会随包附带 LGPL 2.1+ 协议的 `libmpv` 动态库，对外分发应用时（包括闭源或商业应用）只需注意两点：
+
+1. **保持 `libmpv` 为独立、可替换的动态库**：继续以独立的 `libmpv.dylib`（macOS）、`mpv-2.dll`（Windows）或 `libmpv.so`（Linux）形式放在应用旁边——这正是 `mygo build` 默认的打包方式——不要将 `libmpv` 静态链接进主程序，也不要禁止用户替换该动态库（或通过 `MYGO_NATIVE_MPV` 指定替换库）。
+2. **附带 LGPL 2.1 许可证声明**：在应用的“关于 / 开源许可”页面或分发包中注明使用了 LGPL 2.1+ 的 `libmpv` 及其第三方依赖，并提供对应的许可证文本与源码获取方式。
+
+完整的第三方依赖清单、源码对应关系与 LGPL 2.1 动态替换细则请参阅 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。

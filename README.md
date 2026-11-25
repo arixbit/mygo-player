@@ -214,4 +214,13 @@ To build self-contained LGPL-2.1+ libraries locally or via GitHub Actions:
 ## License
 
 - Go plugin source code, examples, and build scripts: **MIT License** ([LICENSE](LICENSE)).
-- Underlying `libmpv` shared library: **LGPL 2.1 or later** (compiled strictly without GPL or nonfree components). See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the complete list of third-party licenses and LGPL dynamic relinking instructions.
+- Underlying `libmpv` shared library: **LGPL 2.1 or later** (compiled strictly without GPL or nonfree components).
+
+### Distributing apps with `mygo-player` (LGPL 2.1)
+
+Because desktop apps using `mygo-player` bundle the LGPL 2.1+ `libmpv` shared library, apps you distribute (including closed-source or commercial apps) should:
+
+1. **Keep `libmpv` as a separate, replaceable shared library** (`libmpv.dylib` on macOS, `mpv-2.dll` on Windows, `libmpv.so` on Linux) beside the app—this is already what `mygo build` does automatically—and avoid statically linking `libmpv` into your executable or blocking users from swapping it (or setting `MYGO_NATIVE_MPV`).
+2. **Include the LGPL 2.1 license notice** in your app's license notices / distribution (stating that the app uses LGPL 2.1+ `libmpv` and its included third-party libraries, along with the license text and source reference).
+
+See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the complete list of third-party licenses, source references, and LGPL 2.1 Section 6 dynamic relinking details.

@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # Builds a self-contained, strictly LGPL-2.1-or-later mpv-2.dll for Windows
-# (amd64 / x86_64) under MSYS2 UCRT64 with zero non-system DLL dependencies.
+# (amd64 / x86_64 under MSYS2 UCRT64, or arm64 / aarch64 under MSYS2 CLANGARM64)
+# with zero non-system DLL dependencies.
 #
-# Usage (from MSYS2 UCRT64 shell):
-#   ./scripts/build-libmpv-windows.sh <amd64|x86_64> <output-dll-path>
+# Usage:
+#   # From MSYS2 UCRT64 shell (amd64):
+#   ./scripts/build-libmpv-windows.sh amd64 dist/mpv-2-windows-amd64.dll
+#   # From MSYS2 CLANGARM64 shell (arm64):
+#   ./scripts/build-libmpv-windows.sh arm64 dist/mpv-2-windows-arm64.dll
 #
 # License guarantee:
 #   - FFmpeg is configured WITHOUT --enable-gpl, --enable-version3, or --enable-nonfree.
@@ -29,14 +33,49 @@ LIBPLACEBO_VER="v7.349.0"
 FFMPEG_VER="7.1.1"
 MPV_VER="${MPV_VERSION:-0.40.0}"
 
+pick_tool() {
+  for t in "$@"; do
+    if command -v "$t" >/dev/null 2>&1; then
+      echo "$t"
+      return 0
+    fi
+  done
+  echo "$1"
+}
+
+AUTOTOOLS_HOST_ARGS=()
 case "$ARCH" in
   x86_64|amd64)
     ARCH="x86_64"
     FFMPEG_ARCH="x86_64"
-    PE_FORMAT="pei-x86-64"
+    HOST_TRIPLET="x86_64-w64-mingw32"
+    PE_FORMAT_RE="pei-x86-64|coff-x86-64"
+    CC="${CC:-gcc}"
+    CXX="${CXX:-g++}"
+    AR="${AR:-ar}"
+    RANLIB="${RANLIB:-ranlib}"
+    NM="${NM:-nm}"
+    RC="${RC:-windres}"
+    STRIP="${STRIP:-strip}"
+    OBJDUMP="${OBJDUMP:-objdump}"
+    ;;
+  arm64|aarch64)
+    ARCH="aarch64"
+    FFMPEG_ARCH="aarch64"
+    HOST_TRIPLET="aarch64-w64-mingw32"
+    PE_FORMAT_RE="coff-arm64|pei-aarch64"
+    AUTOTOOLS_HOST_ARGS=(--build="$HOST_TRIPLET" --host="$HOST_TRIPLET")
+    CC="${CC:-clang}"
+    CXX="${CXX:-clang++}"
+    AR="${AR:-$(pick_tool llvm-ar ar)}"
+    RANLIB="${RANLIB:-$(pick_tool llvm-ranlib ranlib)}"
+    NM="${NM:-$(pick_tool llvm-nm nm)}"
+    RC="${RC:-$(pick_tool llvm-windres windres)}"
+    STRIP="${STRIP:-$(pick_tool llvm-strip strip)}"
+    OBJDUMP="${OBJDUMP:-$(pick_tool llvm-objdump objdump)}"
     ;;
   *)
-    echo "Unsupported Windows architecture: $ARCH (want amd64 or x86_64)" >&2
+    echo "Unsupported Windows architecture: $ARCH (want amd64, x86_64, arm64, or aarch64)" >&2
     exit 1
     ;;
 esac
@@ -58,19 +97,19 @@ JOBS="$(nproc)"
 
 mkdir -p "$SRC_DIR" "$BUILD_DIR_POSIX" "$PREFIX_POSIX/include" "$PREFIX_POSIX/lib/pkgconfig"
 
-export CC="gcc"
-export CXX="g++"
+export CC CXX AR RANLIB NM RC
 export CFLAGS="-O2 -I$PREFIX_WIN/include"
 export CXXFLAGS="$CFLAGS"
 export LDFLAGS="-L$PREFIX_WIN/lib"
-# Strictly isolate pkg-config from /ucrt64/lib/pkgconfig so no MSYS2 dynamic
-# library (.dll.a) dependencies leak into mpv-2.dll. Use a POSIX path here
-# because MSYS2 treats PKG_CONFIG_LIBDIR as a colon-delimited path list and
-# translates it to Windows paths automatically for native Win32 pkgconf/meson.
+# Strictly isolate pkg-config from system /ucrt64 or /clangarm64 pkgconfig dirs
+# so no MSYS2 dynamic library (.dll.a) dependencies leak into mpv-2.dll. Use a
+# POSIX path here because MSYS2 treats PKG_CONFIG_LIBDIR as a colon-delimited
+# path list and translates it to Windows paths for native Win32 pkgconf/meson.
 export PKG_CONFIG_LIBDIR="$PREFIX_POSIX/lib/pkgconfig"
 export PKG_CONFIG_PATH=""
 
 echo "==> Building strictly LGPL 2.1+ self-contained mpv-2.dll ($MPV_VER) for windows/$ARCH"
+echo "    Toolchain:        CC=$CC CXX=$CXX AR=$AR STRIP=$STRIP OBJDUMP=$OBJDUMP"
 echo "    Work dir (POSIX): $WORK_DIR_POSIX"
 echo "    Work dir (Win):   $WORK_DIR_WIN"
 echo "    Output:           $OUT_DLL_POSIX"
@@ -101,7 +140,7 @@ normalize_pc_files() {
 fetch_tar "https://github.com/madler/zlib/releases/download/v${ZLIB_VER}/zlib-${ZLIB_VER}.tar.gz" "$SRC_DIR/zlib"
 (
   cd "$SRC_DIR/zlib"
-  make -f win32/Makefile.gcc -j"$JOBS" libz.a
+  make -f win32/Makefile.gcc CC="$CC" AR="$AR" RC="$RC" -j"$JOBS" libz.a
   cp zlib.h zconf.h "$PREFIX_POSIX/include/"
   cp libz.a "$PREFIX_POSIX/lib/"
   cat > "$PREFIX_POSIX/lib/pkgconfig/zlib.pc" <<EOF
@@ -123,7 +162,7 @@ pkg-config --cflags --libs zlib
 fetch_tar "https://ftp.gnu.org/pub/gnu/libiconv/libiconv-${LIBICONV_VER}.tar.gz" "$SRC_DIR/libiconv"
 (
   cd "$SRC_DIR/libiconv"
-  ./configure --prefix="$PREFIX_POSIX" --enable-static --disable-shared --disable-nls --disable-rpath
+  ./configure "${AUTOTOOLS_HOST_ARGS[@]}" --prefix="$PREFIX_POSIX" --enable-static --disable-shared --disable-nls --disable-rpath
   make -j"$JOBS" install
 )
 
@@ -154,7 +193,7 @@ ninja -C "$BUILD_DIR_WIN/harfbuzz" -j"$JOBS" install
 fetch_tar "https://github.com/adah1972/libunibreak/releases/download/libunibreak_${LIBUNIBREAK_VER//./_}/libunibreak-${LIBUNIBREAK_VER}.tar.gz" "$SRC_DIR/libunibreak"
 (
   cd "$SRC_DIR/libunibreak"
-  ./configure --prefix="$PREFIX_POSIX" --enable-static --disable-shared --disable-dependency-tracking
+  ./configure "${AUTOTOOLS_HOST_ARGS[@]}" --prefix="$PREFIX_POSIX" --enable-static --disable-shared --disable-dependency-tracking
   make -j"$JOBS" install
 )
 normalize_pc_files
@@ -163,7 +202,7 @@ normalize_pc_files
 fetch_tar "https://github.com/libass/libass/releases/download/${LIBASS_VER}/libass-${LIBASS_VER}.tar.xz" "$SRC_DIR/libass"
 (
   cd "$SRC_DIR/libass"
-  ./configure --prefix="$PREFIX_POSIX" --enable-static --disable-shared \
+  ./configure "${AUTOTOOLS_HOST_ARGS[@]}" --prefix="$PREFIX_POSIX" --enable-static --disable-shared \
     --enable-directwrite --disable-fontconfig --disable-libpng --disable-asm
   make -j"$JOBS" install
 )
@@ -208,6 +247,11 @@ fetch_tar "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VER}.tar.xz" "$SRC_DIR/ff
     --target-os=mingw64 \
     --cc="$CC" \
     --cxx="$CXX" \
+    --as="$CC" \
+    --ar="$AR" \
+    --ranlib="$RANLIB" \
+    --nm="$NM" \
+    --strip="$STRIP" \
     --extra-cflags="$CFLAGS" \
     --extra-ldflags="$LDFLAGS" \
     --pkg-config=pkg-config \
@@ -233,7 +277,44 @@ normalize_pc_files
 
 # 12. mpv / libmpv (strictly LGPL-2.1+: -Dgpl=false)
 # Built as a shared DLL (--default-library=shared) while statically linking all
-# third-party archives (--prefer-static) and GCC/C++/winpthread runtimes.
+# third-party archives (--prefer-static) and C++/unwind/winpthread runtimes.
+if [[ "$ARCH" == "aarch64" ]]; then
+  SYS_LIB_DIR="${MSYSTEM_PREFIX:-/clangarm64}/lib"
+  STATIC_CPP_TOKENS="-Wl,-Bstatic,-lc++"
+  STATIC_RUNTIME_ARGS="'-Wl,-Bstatic','-lc++'"
+  if [[ -f "$SYS_LIB_DIR/libc++abi.a" ]]; then
+    STATIC_CPP_TOKENS+=",-lc++abi"
+    STATIC_RUNTIME_ARGS+=",'-lc++abi'"
+  fi
+  if [[ -f "$SYS_LIB_DIR/libunwind.a" ]]; then
+    STATIC_CPP_TOKENS+=",-lunwind"
+    STATIC_RUNTIME_ARGS+=",'-lunwind'"
+  fi
+  if [[ -f "$SYS_LIB_DIR/libwinpthread.a" ]]; then
+    STATIC_CPP_TOKENS+=",-lwinpthread"
+    STATIC_RUNTIME_ARGS+=",'-lwinpthread'"
+  fi
+  STATIC_CPP_TOKENS+=",-Bdynamic"
+
+  # Ensure C++ static archives (libplacebo, harfbuzz) pull static libc++/libunwind
+  # even when meson appends Libs.private after our explicit link args.
+  if [[ -f "$PREFIX_POSIX/lib/pkgconfig/libplacebo.pc" ]] && ! grep -qE -- '(-lc\+\+|-lstdc\+\+)' "$PREFIX_POSIX/lib/pkgconfig/libplacebo.pc"; then
+    sed -i 's|^Libs\.private:|Libs.private: -lc++ |' "$PREFIX_POSIX/lib/pkgconfig/libplacebo.pc"
+  fi
+  for pc in "$PREFIX_POSIX"/lib/pkgconfig/*.pc; do
+    [[ -f "$pc" ]] || continue
+    sed -i -E \
+      -e "s/(^|[[:space:]])-l(c\+\+|stdc\+\+)([[:space:]]|$)/\\1${STATIC_CPP_TOKENS}\\3/g" \
+      -e "s/(^|[[:space:]])-lunwind([[:space:]]|$)/\\1-Wl,-Bstatic,-lunwind,-Bdynamic\\2/g" \
+      -e "s/(^|[[:space:]])-lwinpthread([[:space:]]|$)/\\1-Wl,-Bstatic,-lwinpthread,-Bdynamic\\2/g" \
+      "$pc"
+  done
+
+  MPV_LINK_ARGS="['-L${PREFIX_WIN}/lib','-static-libgcc',${STATIC_RUNTIME_ARGS},'-Wl,-Bdynamic','-Wl,--exclude-libs,ALL']"
+else
+  MPV_LINK_ARGS="['-L${PREFIX_WIN}/lib','-static','-static-libgcc','-static-libstdc++','-Wl,-Bstatic','-lstdc++','-lwinpthread','-Wl,-Bdynamic','-Wl,--exclude-libs,ALL']"
+fi
+
 fetch_tar "https://github.com/mpv-player/mpv/archive/refs/tags/v${MPV_VER}.tar.gz" "$SRC_DIR/mpv"
 meson setup "$BUILD_DIR_WIN/mpv" "$(cygpath -m "$SRC_DIR/mpv")" \
   --prefix="$PREFIX_WIN" --libdir=lib --buildtype=release \
@@ -281,8 +362,8 @@ meson setup "$BUILD_DIR_WIN/mpv" "$(cygpath -m "$SRC_DIR/mpv")" \
   -Dhtml-build=disabled \
   -Dmanpage-build=disabled \
   -Dpdf-build=disabled \
-  -Dc_link_args="['-L${PREFIX_WIN}/lib','-static','-static-libgcc','-static-libstdc++','-Wl,-Bstatic','-lstdc++','-lwinpthread','-Wl,-Bdynamic','-Wl,--exclude-libs,ALL']" \
-  -Dcpp_link_args="['-L${PREFIX_WIN}/lib','-static','-static-libgcc','-static-libstdc++','-Wl,-Bstatic','-lstdc++','-lwinpthread','-Wl,-Bdynamic','-Wl,--exclude-libs,ALL']"
+  -Dc_link_args="$MPV_LINK_ARGS" \
+  -Dcpp_link_args="$MPV_LINK_ARGS"
 ninja -C "$BUILD_DIR_WIN/mpv" -j"$JOBS" install
 
 BUILT_DLL="$(find "$PREFIX_POSIX/bin" "$PREFIX_POSIX/lib" -maxdepth 1 -name '*mpv*.dll' -type f 2>/dev/null | head -n 1)"
@@ -292,19 +373,19 @@ if [[ -z "$BUILT_DLL" ]]; then
 fi
 
 cp "$BUILT_DLL" "$OUT_DLL_POSIX"
-strip --strip-unneeded "$OUT_DLL_POSIX"
+"$STRIP" --strip-unneeded "$OUT_DLL_POSIX"
 
 echo "==> Verifying $OUT_DLL_POSIX"
-OBJDUMP_F="$(objdump -f "$OUT_DLL_POSIX")"
+OBJDUMP_F="$("$OBJDUMP" -f "$OUT_DLL_POSIX" | tr -d '\r')"
 echo "$OBJDUMP_F"
-if ! grep -qi "$PE_FORMAT" <<< "$OBJDUMP_F"; then
-  echo "ERROR: $OUT_DLL_POSIX PE format does not match $PE_FORMAT" >&2
+if ! grep -qiE "$PE_FORMAT_RE" <<< "$OBJDUMP_F"; then
+  echo "ERROR: $OUT_DLL_POSIX PE format does not match $PE_FORMAT_RE" >&2
   exit 1
 fi
 
-echo "==> Checking DLL imports via objdump -p (must be Windows system DLLs only):"
-OBJDUMP_P="$(objdump -p "$OUT_DLL_POSIX")"
-IMPORTED_DLLS="$(awk '/DLL Name:/{print $3}' <<< "$OBJDUMP_P" | tr -d '\r' | sort -u)"
+echo "==> Checking DLL imports via $OBJDUMP -p (must be Windows system DLLs only):"
+OBJDUMP_P="$("$OBJDUMP" -p "$OUT_DLL_POSIX" | tr -d '\r')"
+IMPORTED_DLLS="$(awk '/DLL Name:/{print $3}' <<< "$OBJDUMP_P" | sort -u)"
 echo "$IMPORTED_DLLS"
 
 # Strict allowlist of Windows OS system DLLs (case-insensitive).
