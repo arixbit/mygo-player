@@ -323,3 +323,34 @@ func TestToggleMute(t *testing.T) {
 		t.Fatalf("ToggleMute after Close = %v, want ErrClosed", err)
 	}
 }
+
+func TestTogglePauseQuickPairsAndSeekable(t *testing.T) {
+	ffmpeg := requireLibMPVAndFFmpeg(t)
+	clip := genClip(t, ffmpeg, "toggle.mkv", clipSpec{dur: 10})
+	p := newTestPlayer(t, Options{})
+	if err := p.Open(clip); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	waitFor(t, 8*time.Second, "playing and seekable", func() bool {
+		s := p.Snapshot()
+		return s.State == StatePlaying && s.Seekable
+	})
+	// Calls in quick succession each flip it, whatever Snapshot says yet.
+	for i := 0; i < 10; i++ {
+		if err := p.TogglePause(); err != nil {
+			t.Fatal(err)
+		}
+		if err := p.TogglePause(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if v, _ := p.GetPropertyString("pause"); v != "no" {
+		t.Fatalf("pause after ten quick toggle pairs = %q, want no", v)
+	}
+	if err := p.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if p.Snapshot().Seekable {
+		t.Error("Seekable should reset when the media is stopped")
+	}
+}

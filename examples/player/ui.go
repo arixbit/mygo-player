@@ -188,7 +188,7 @@ func (a *demoApp) shortcuts(c *ui.Context, s player.Snapshot, has bool, now time
 	case c.Shortcut(0, ui.KeyM) && !c.ShortcutRepeated():
 		a.toggleMute(s, now)
 	case c.Shortcut(0, ui.KeyC) && !c.ShortcutRepeated():
-		a.toggleSubtitles(s)
+		a.toggleSubtitles(s, now)
 	case c.Shortcut(0, ui.KeyF) && !c.ShortcutRepeated():
 		a.toggleFullScreen()
 	case a.fullScreen() && c.Shortcut(0, ui.KeyEscape):
@@ -205,17 +205,13 @@ func (a *demoApp) shortcuts(c *ui.Context, s player.Snapshot, has bool, now time
 	}
 }
 
-// hitLayer takes clicks on the picture: a click plays or pauses, a double
-// click toggles full screen and leaves playback as it was. With touch, a tap
-// shows or hides the controls.
-//
-// A click waits clickDelay for a second one before it acts, so a double
-// click usually does nothing to playback; a slower double click undoes the
-// first click's toggle instead.
+// hitLayer takes clicks on the picture. As in QuickTime Player, a click
+// does nothing to playback (the pointer moving already brings the controls
+// back) and a double click toggles full screen, so the two never get in
+// each other's way. With touch, a tap shows or hides the controls.
 func (a *demoApp) hitLayer(c *ui.Context, has, chrome bool, now time.Time) {
 	hit := ui.Box(c.Key("hit")).Absolute().Fill().AccessHidden(true)
 	if !has {
-		a.pendingClick = time.Time{}
 		return
 	}
 	if !chrome && c.Preferences().Hover() {
@@ -224,28 +220,12 @@ func (a *demoApp) hitLayer(c *ui.Context, has, chrome bool, now time.Time) {
 	double, click := hit.DoubleClicked(), hit.Clicked()
 	switch {
 	case double && !a.lastTouch:
-		if a.pendingClick.IsZero() && now.Sub(a.clickActed) < time.Second {
-			a.togglePlay() // the first click already acted: undo it
-		}
-		a.pendingClick, a.skipClick = time.Time{}, true
 		a.toggleFullScreen()
-	case click && a.skipClick:
-		a.skipClick = false // the release of the double click's second press
 	case click && a.lastTouch:
 		if chrome {
 			a.lastActivity = time.Time{}
 		} else {
 			a.lastActivity = now
-		}
-	case click:
-		a.pendingClick = now
-	}
-	if !a.pendingClick.IsZero() {
-		if wait := clickDelay - now.Sub(a.pendingClick); wait > 0 {
-			c.After(wait)
-		} else {
-			a.pendingClick, a.clickActed = time.Time{}, now
-			a.togglePlay()
 		}
 	}
 }
@@ -262,13 +242,17 @@ func (a *demoApp) liftSubtitles(c *ui.Context, root ui.Element, s player.Snapsho
 	if !chrome {
 		anim = motionChromeOut
 	}
-	pos := int(math.Round(float64(root.AnimateTo("sub-pos", target, anim))))
 	if !subtitlesOn(s) {
-		// Nothing to move: leave libmpv alone until subtitles show, and
-		// then put them where they belong at once.
-		pos = 100
+		// Nothing to move: leave libmpv alone until subtitles show (only
+		// putting back a lift still applied), then place them at once.
+		if a.subPosSet != 0 && a.subPosSet != 100 {
+			a.subPosSet = 100
+			a.applySubPos(100)
+		}
+		return
 	}
-	if pos != a.subPosSet && (has || a.subPosSet != 0) {
+	pos := int(math.Round(float64(root.AnimateTo("sub-pos", target, anim))))
+	if pos != a.subPosSet {
 		a.subPosSet = pos
 		a.applySubPos(max(0, min(pos, 150)))
 	}
@@ -342,7 +326,7 @@ func (a *demoApp) titleBar(c *ui.Context, s player.Snapshot, shown bool, l layou
 	ui.Row(c.Key("title")).Absolute().Top(l.margin).Left(l.margin).MaxWidth(l.w*0.6).
 		Padding(8, 14).Radius(12).Background(hudSurface(c)).Border(1, hudHairline).
 		IgnoreInput(true).AccessHidden(!shown).AnimatePose(pose, anim).Children(func() {
-		ui.Text(c, mediaName(s.MediaTitle, a.target)).FontSize(13).Bold().TextColor(hudText).
+		ui.Text(c, a.name(s)).FontSize(13).Bold().TextColor(hudText).
 			SingleLine().TruncateMiddle().ContentTransition(contentSwap)
 	})
 }
@@ -364,7 +348,7 @@ func (a *demoApp) nowPlaying(c *ui.Context, s player.Snapshot, l layout) {
 	ui.Column(c.Key("now-playing")).Center().Gap(12).MaxWidth(min(480, l.w-2*l.margin)).
 		Transition(overlayTransition).IgnoreInput(true).Children(func() {
 		ui.Icon(c, iconMusic).FontSize(56).TextColor(hudMuted)
-		ui.Text(c, mediaName(s.MediaTitle, a.target)).FontSize(20).Bold().TextColor(hudText).
+		ui.Text(c, a.name(s)).FontSize(20).Bold().TextColor(hudText).
 			TextAlign(ui.Center).ContentTransition(contentSwap)
 	})
 }

@@ -201,4 +201,7 @@ type Snapshot struct {
 	VideoRotate int
 	// Panscan is the crop-to-fill amount in [0, 1] (see SetPanscan).
 	Panscan float64
+	// Seekable reports whether libmpv can seek in the current media (false
+	// for most live streams, and until the file is loaded).
+	Seekable bool
 }

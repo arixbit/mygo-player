@@ -100,7 +100,7 @@ MYGO_NATIVE_MPV=/path/to/libmpv.dylib CGO_ENABLED=0 go run ./examples/player \
 The example is a complete, minimal player: drop a video (or choose one with `Cmd+O` / `Ctrl+O`, or "Open With" from Finder/Explorer) and it plays. Matching subtitle files next to the video load automatically, and dropping subtitle files on a playing video adds them. The control bar hides with the cursor after a moment of playback and comes back on any movement; subtitles move up out of its way while it shows. Menus only appear when they offer a choice (the audio menu needs two or more tracks), narrow windows fold what doesn't fit into the More (⋯) menu, tracks are named in plain language ("Japanese · Commentary"), errors show as toasts or as a card with a way forward, and every transition respects the system's Reduce Motion setting.
 
 Keyboard shortcuts in `examples/player` (shown in each control's tooltip):
-- `Space` / `K`: Play / Pause (replays at the end); a click on the picture does the same
+- `Space` / `K`: Play / Pause (replays at the end)
 - `Left` / `Right`: Back / forward 5 seconds
 - `Up` / `Down`: Volume up / down (turning it up unmutes)
 - `M`: Mute / Unmute
@@ -112,7 +112,7 @@ Keyboard shortcuts in `examples/player` (shown in each control's tooltip):
 
 - **Online streams with custom HTTP headers:** Pass auth tokens (`Authorization`), session `Cookie`s, and anti-hotlink `Referer` / `User-Agent` headers per stream. Per-open headers are isolated and automatically reset on the next `Open()` call so credentials never leak between videos.
 - **Multi-audio tracks:** Inspect all embedded audio streams (`AudioTracks()`), switch languages/commentary tracks on the fly (`SelectAudioTrack`), or mute audio decoding (`DisableAudioTrack`).
-- **Readable track names:** `Track.DisplayName()` names a track for menus ("Japanese · Commentary", "English · Forced", or an external subtitle's file name), and `LanguageName("jpn")` spells out the ISO 639-1/639-2 codes of about fifty common languages (others stay as upper-case codes), so apps don't show raw `#2 [jpn] (aac)` labels.
+- **Readable track names:** `Track.DisplayName()` names a track for menus ("Japanese · Commentary", "English · Forced", or an external subtitle's file name), and `LanguageName("jpn")` spells out the ISO 639-1/639-2 codes of about fifty common languages (other codes stay as upper-case codes; `und`, `mul`, `mis` and `zxx`, which name no single language, return ""), so apps don't show raw `#2 [jpn] (aac)` labels.
 - **Embedded & external subtitles:** Switch between embedded tracks or attach external subtitle files (`.srt`, `.ass`, `.ssa`, `.vtt`, `.sup`) with `AddSubtitleFile`, and show/hide them anytime (`SetSubtitleVisible`).
 - **Mute toggle:** `ToggleMute()` mutes or unmutes; unmuting at volume 0 restores an audible volume so it is never silent.
 - **Runtime hardware decoding:** Switch modes dynamically with `SetHWDec` (`HWDecAutoSafe`, `HWDecAutoCopy`, `HWDecVideoToolbox`, `HWDecD3D11VACopy`, `HWDecVAAPICopy`, `HWDecNone`) and inspect the active decoder with `CurrentHWDec()`.

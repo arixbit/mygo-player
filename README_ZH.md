@@ -100,7 +100,7 @@ MYGO_NATIVE_MPV=/path/to/libmpv.dylib CGO_ENABLED=0 go run ./examples/player \
 示例本身就是一个完整而精简的播放器：把视频拖进窗口（或用 `Cmd+O` / `Ctrl+O` 选择，或在访达 / 资源管理器里“打开方式”选它）即可播放。与视频同名的字幕文件会自动加载，播放中把字幕文件拖进来就会挂上。播放片刻后控制栏连同鼠标指针一起隐去，一动鼠标就回来；控制栏出现时字幕会自动上移避让。菜单只在真有选择时出现（音轨菜单需要两条以上音轨），窗口窄时放不下的功能收进“更多”（⋯）菜单，轨道名用人话显示（“Japanese · Commentary”），出错时以不打断的提示或带出路的卡片说明，所有过渡动画都遵循系统的“减弱动态效果”设置。
 
 `examples/player` 内置快捷键（每个按钮的提示里也会写明）：
-- `Space` / `K`：播放 / 暂停（播完后重播）；单击画面效果相同
+- `Space` / `K`：播放 / 暂停（播完后重播）
 - `Left` / `Right`：后退 / 前进 5 秒
 - `Up` / `Down`：调高 / 调低音量（调高会自动取消静音）
 - `M`：静音 / 取消静音
@@ -112,7 +112,7 @@ MYGO_NATIVE_MPV=/path/to/libmpv.dylib CGO_ENABLED=0 go run ./examples/player \
 
 - **在线流自定义 HTTP 请求头**：播放需要登录或防盗链校验的在线视频时，可以直接传入鉴权 Token（`Authorization`）、`Cookie`，以及防盗链所需的 `Referer` 和 `User-Agent`。每次调用 `Open()` 传入的请求头都会自动隔离，下一次打开其他视频时自动重置，不会把上一个视频的 Token 或 Cookie 泄露出去。
 - **多音轨切换**：通过 `AudioTracks()` 获取视频内所有音轨，用 `SelectAudioTrack` 随时切换配音语言或评论音轨，也可用 `DisableAudioTrack` 关闭音轨。
-- **易读的轨道名**：`Track.DisplayName()` 为菜单生成轨道名（“Japanese · Commentary”、“English · Forced”，外挂字幕则用文件名），`LanguageName("jpn")` 把约五十种常用语言的 ISO 639-1/639-2 代码转成语言名称（其余保留为大写代码），应用无需再显示 `#2 [jpn] (aac)` 这类原始标签。
+- **易读的轨道名**：`Track.DisplayName()` 为菜单生成轨道名（“Japanese · Commentary”、“English · Forced”，外挂字幕则用文件名），`LanguageName("jpn")` 把约五十种常用语言的 ISO 639-1/639-2 代码转成语言名称（其余保留为大写代码；`und`、`mul`、`mis`、`zxx` 这类不代表单一语言的代码返回空字符串），应用无需再显示 `#2 [jpn] (aac)` 这类原始标签。
 - **内嵌与外挂字幕**：同时支持读取视频内嵌字幕和挂载外部字幕文件（如 `.srt`、`.ass`、`.ssa`、`.vtt`、`.sup`），使用 `AddSubtitleFile` 即可加载并激活，配合 `SetSubtitleVisible` 随时显示或隐藏。
 - **静音切换**：`ToggleMute()` 一键静音 / 取消静音；在音量为 0 时取消静音会自动恢复到可听见的音量，不会“取消了还是没声”。
 - **运行时硬解控制**：随时通过 `SetHWDec` 切换解码模式（`HWDecAutoSafe`、`HWDecAutoCopy`、`HWDecVideoToolbox`、`HWDecD3D11VACopy`、`HWDecVAAPICopy`、`HWDecNone`），并通过 `CurrentHWDec()` 查看当前实际生效的硬解后端。

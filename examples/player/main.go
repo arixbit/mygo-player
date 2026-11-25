@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -97,18 +98,24 @@ func main() {
 			StateKey:  "player",
 			Content:   ui.View(app.view),
 		})
-		app.win.OnClosed(func() { _ = p.Close() })
+		app.win.OnClosed(func() {
+			app.cmds.stop() // drop what waits: at most the running command delays Close
+			_ = p.Close()
+		})
 
+		// The file the app was launched with, from the command line or the
+		// desktop, opens once: the system may pass it both ways, and before
+		// or after the window is ready.
 		var arg string
 		if flag.NArg() > 0 {
 			arg = flag.Arg(0)
 		}
-		// The file the app was launched with, from the command line or the
-		// desktop, once: the system may pass it both ways.
-		if paths := launch.attach(app); len(paths) > 0 {
-			app.openPaths(paths, true)
-		} else if arg != "" {
+		paths := launch.attach(app, arg)
+		if arg != "" {
 			app.open(arg, subs)
+		}
+		if len(paths) > 0 {
+			app.openPaths(paths, true)
 		}
 	})
 
@@ -118,18 +125,23 @@ func main() {
 }
 
 // launchFiles holds files the desktop opens with the app until its window
-// is ready, then hands them to it.
+// is ready, then hands them to it. The file given on the command line is
+// skipped once if the desktop passes it too.
 type launchFiles struct {
-	mu    sync.Mutex
-	app   *demoApp
-	queue []string
+	mu      sync.Mutex
+	app     *demoApp
+	queue   []string
+	skipArg string // the command line's file, not yet seen from the desktop
 }
 
 func (l *launchFiles) open(path string) {
 	l.mu.Lock()
 	app := l.app
-	if app == nil {
+	switch {
+	case app == nil:
 		l.queue = append(l.queue, path)
+	case l.skipArg != "" && samePath(path, l.skipArg):
+		l.skipArg, app = "", nil
 	}
 	l.mu.Unlock()
 	if app != nil {
@@ -137,12 +149,29 @@ func (l *launchFiles) open(path string) {
 	}
 }
 
-// attach hands later files to app and returns those that came before.
-func (l *launchFiles) attach(app *demoApp) []string {
+// attach hands later files to app and returns those that came before,
+// without the command line's file arg.
+func (l *launchFiles) attach(app *demoApp, arg string) []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.app = app
-	q := l.queue
+	l.app, l.skipArg = app, arg
+	var q []string
+	for _, p := range l.queue {
+		if l.skipArg != "" && samePath(p, l.skipArg) {
+			l.skipArg = ""
+			continue
+		}
+		q = append(q, p)
+	}
 	l.queue = nil
 	return q
+}
+
+func samePath(a, b string) bool {
+	if a == b {
+		return true
+	}
+	aa, err1 := filepath.Abs(a)
+	bb, err2 := filepath.Abs(b)
+	return err1 == nil && err2 == nil && aa == bb
 }

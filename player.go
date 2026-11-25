@@ -58,6 +58,7 @@ const (
 	propSubPos
 	propVideoRotate
 	propPanscan
+	propSeekable
 )
 
 // posNotifyInterval throttles OnStateChange/Invalidate notifications caused
@@ -96,6 +97,7 @@ var observedProperties = []observedProp{
 	{propSubPos, "sub-pos", mpv.FormatDouble},
 	{propVideoRotate, "video-rotate", mpv.FormatString},
 	{propPanscan, "panscan", mpv.FormatDouble},
+	{propSeekable, "seekable", mpv.FormatFlag},
 }
 
 // Player manages a libmpv playback instance rendered into MyGo's native UI
@@ -435,6 +437,7 @@ func (p *Player) resetMediaLocked() {
 	p.snap.EOF = false
 	p.snap.Position = 0
 	p.snap.Duration = 0
+	p.snap.Seekable = false
 	p.snap.Buffering = false
 	p.snap.MediaTitle = ""
 	p.snap.VideoWidth = 0
@@ -454,6 +457,11 @@ func (p *Player) Play() error {
 	if p.closed.Load() {
 		return ErrClosed
 	}
+	return p.playLocked()
+}
+
+// playLocked is Play. Caller holds cmdMu.
+func (p *Player) playLocked() error {
 	p.mu.RLock()
 	eof := p.snap.EOF
 	loaded := p.fileLoaded
@@ -485,13 +493,26 @@ func (p *Player) Pause() error {
 }
 
 // TogglePause switches between playing and paused states. When playback is
-// paused or has reached EOF it calls Play (which restarts ended media).
+// paused or has reached EOF it calls Play (which restarts ended media). It
+// decides from libmpv's current pause state rather than the asynchronously
+// updated Snapshot, so calls made in quick succession each flip it.
 func (p *Player) TogglePause() error {
-	s := p.Snapshot()
-	if s.Paused || s.EOF {
-		return p.Play()
+	p.cmdMu.Lock()
+	defer p.cmdMu.Unlock()
+	if p.closed.Load() {
+		return ErrClosed
 	}
-	return p.Pause()
+	paused, err := p.client.GetPropertyFlag("pause")
+	if err != nil {
+		return err
+	}
+	p.mu.RLock()
+	eof := p.snap.EOF
+	p.mu.RUnlock()
+	if paused || eof {
+		return p.playLocked()
+	}
+	return p.client.SetPropertyFlag("pause", true)
 }
 
 // Stop stops playback and returns the player to idle, clearing every per-file
@@ -1310,6 +1331,14 @@ func (p *Player) handlePropertyChange(id uint64, ep *mpv.EventProperty) {
 				p.eofNotified = false
 			}
 			p.recomputeStateLocked()
+			changed = true
+		}
+	case propSeekable:
+		if hasFlag {
+			p.snap.Seekable = *(*int32)(ep.Data) != 0
+			changed = true
+		} else if isNone {
+			p.snap.Seekable = false
 			changed = true
 		}
 	case propPausedForCache:

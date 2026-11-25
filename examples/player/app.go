@@ -27,11 +27,11 @@ const (
 	seekHold = 1500 * time.Millisecond
 	// volumeHold does the same for the volume.
 	volumeHold = 800 * time.Millisecond
-	// clickDelay is how long a click on the picture waits to tell itself
-	// apart from the first half of a double click.
-	clickDelay = 220 * time.Millisecond
-	volumeStep = 5
-	skipStep   = 5 * time.Second
+	// subtitleHold keeps the subtitles' on/off choice until playback
+	// reports it, so pressing C twice quickly turns them off and on again.
+	subtitleHold = 800 * time.Millisecond
+	volumeStep   = 5
+	skipStep     = 5 * time.Second
 )
 
 // mediaPlayer is what the example uses of *player.Player, so its interface
@@ -44,6 +44,7 @@ type mediaPlayer interface {
 	SeekRelative(delta time.Duration) error
 	SetVolume(v float64) error
 	SetMuted(muted bool) error
+	ToggleMute() error
 	SetSpeed(rate float64) error
 	SelectAudioTrack(id int64) error
 	SelectSubtitleTrack(id int64) error
@@ -61,7 +62,8 @@ type demoApp struct {
 	canvas func(c *ui.Context) ui.Element
 	cmds   *commandQueue // nil runs commands at once (tests)
 
-	target string // what is open (path or URL), "" when nothing is
+	target  string // what is open (path or URL), "" when nothing is
+	opening bool   // target's Open is queued or running
 
 	lastActivity time.Time // last pointer movement or key press
 	lastTouch    bool      // the last pointer input came from a finger
@@ -80,9 +82,8 @@ type demoApp struct {
 	volTarget    float64   // volume last set, until playback reports it
 	volHoldUntil time.Time // show volTarget until then
 
-	pendingClick time.Time // a click on the picture waiting for a second one
-	clickActed   time.Time // when a click on the picture last toggled playback
-	skipClick    bool      // drop the click that ends a double click
+	subWant      bool      // subtitles on or off as last asked for
+	subHoldUntil time.Time // show subWant until then
 
 	lastSubID int64 // subtitle track to bring back when subtitles are turned on
 	lastSpeed float64
@@ -104,12 +105,15 @@ func newDemoApp(p mediaPlayer, canvas func(c *ui.Context) ui.Element) *demoApp {
 // commandQueue runs player commands one after another on a goroutine of
 // its own: libmpv can hold a command for a long while (loading a file,
 // attaching subtitles, a write while a file loads), which must never stall
-// a frame. A command with a key replaces one with the same key that has not
-// run yet, so a dragged slider sends only its latest value.
+// a frame. A command with a key replaces the last command waiting when it
+// has the same key, so a dragged slider sends only its latest value; it
+// never jumps ahead of other commands, which keeps their order (a seek
+// stays with the file it was meant for).
 type commandQueue struct {
-	mu    sync.Mutex
-	items []command
-	wake  chan struct{}
+	mu      sync.Mutex
+	items   []command
+	wake    chan struct{}
+	stopped bool
 }
 
 type command struct {
@@ -125,16 +129,13 @@ func newCommandQueue() *commandQueue {
 
 func (q *commandQueue) push(key string, fn func()) {
 	q.mu.Lock()
-	replaced := false
-	if key != "" {
-		for i := range q.items {
-			if q.items[i].key == key {
-				q.items[i].fn, replaced = fn, true
-				break
-			}
-		}
+	if q.stopped {
+		q.mu.Unlock()
+		return
 	}
-	if !replaced {
+	if n := len(q.items); key != "" && n > 0 && q.items[n-1].key == key {
+		q.items[n-1].fn = fn
+	} else {
 		q.items = append(q.items, command{key, fn})
 	}
 	q.mu.Unlock()
@@ -142,6 +143,17 @@ func (q *commandQueue) push(key string, fn func()) {
 	case q.wake <- struct{}{}:
 	default:
 	}
+}
+
+// stop drops the commands still waiting and takes no more, as the window
+// closes.
+func (q *commandQueue) stop() {
+	if q == nil {
+		return
+	}
+	q.mu.Lock()
+	q.stopped, q.items = true, nil
+	q.mu.Unlock()
 }
 
 func (q *commandQueue) loop() {
@@ -211,19 +223,26 @@ func (a *demoApp) poke(now time.Time) {
 
 // open plays target, with subtitle files to attach. UI thread only.
 func (a *demoApp) open(target string, subs []string) {
-	a.target = target
-	a.scrubbing, a.holdUntil, a.volHoldUntil = false, time.Time{}, time.Time{}
+	a.target, a.opening = target, true
+	a.scrubbing, a.holdUntil, a.volHoldUntil, a.subHoldUntil = false, time.Time{}, time.Time{}, time.Time{}
 	a.lastSubID = 0
 	a.lastActivity = time.Now()
 	name := mediaName("", target)
+	recent := isLocalFile(target) && a.win != nil
 	a.run("", func() error {
-		return a.p.Open(target, player.OpenOptions{Subtitles: subs})
+		err := a.p.Open(target, player.OpenOptions{Subtitles: subs})
+		a.post(func() {
+			if a.target == target {
+				a.opening = false
+			}
+		})
+		if err == nil && recent {
+			_ = mygo.App.AddRecentDocument(target)
+		}
+		return err
 	}, func(err error) {
 		a.fail(fmt.Sprintf("Couldn’t open “%s”", name), err)
 	})
-	if isLocalFile(target) && a.win != nil {
-		_ = mygo.App.AddRecentDocument(target)
-	}
 }
 
 // openPaths opens what was dropped on the window, chosen in a dialog or
@@ -297,16 +316,22 @@ func (a *demoApp) chooseSubtitles() {
 // hasMedia reports whether something is open (loading, playing, paused or
 // ended), as opposed to idle or failed.
 func (a *demoApp) hasMedia(s player.Snapshot) bool {
+	if a.target == "" {
+		return false
+	}
+	if a.opening {
+		return true // what was opened counts at once, as libmpv gets to it
+	}
 	switch s.State {
 	case player.StateIdle, player.StateError:
 		return false
 	}
-	return a.target != ""
+	return true
 }
 
 // seekable reports whether the media has a known length to seek in (live
 // streams have none).
-func seekable(s player.Snapshot) bool { return s.Duration > 0 }
+func seekable(s player.Snapshot) bool { return s.Seekable && s.Duration > 0 }
 
 func (a *demoApp) togglePlay() {
 	a.run("", a.p.TogglePause, nil)
@@ -360,24 +385,35 @@ func (a *demoApp) silent(s player.Snapshot, now time.Time) bool {
 }
 
 func (a *demoApp) toggleMute(s player.Snapshot, now time.Time) {
-	if !a.silent(s, now) {
-		a.run("", func() error { return a.p.SetMuted(true) }, nil)
+	if !s.Muted && a.volume(s, now) <= 0 {
+		a.setVolume(s, 50, now) // silent at zero: unmuting is never silent
 		return
 	}
-	if a.volume(s, now) <= 0 {
-		a.setVolume(s, 50, now) // unmuting is never silent
-	}
-	a.run("", func() error { return a.p.SetMuted(false) }, nil)
+	// Decided by libmpv's own state as it runs, so quick presses each
+	// flip it; it restores an audible volume when unmuting at zero.
+	a.run("", a.p.ToggleMute, nil)
 }
 
 // subtitlesOn reports whether a subtitle track shows.
 func subtitlesOn(s player.Snapshot) bool { return s.SubTrackID != 0 && s.SubVisible }
 
+// subtitlesShown is subtitlesOn, or what the user last asked for until
+// playback reports it.
+func (a *demoApp) subtitlesShown(s player.Snapshot, now time.Time) bool {
+	if now.Before(a.subHoldUntil) {
+		return a.subWant
+	}
+	return subtitlesOn(s)
+}
+
 // toggleSubtitles turns subtitles off, or back on with the track shown last
 // (else the first one).
-func (a *demoApp) toggleSubtitles(s player.Snapshot) {
-	if subtitlesOn(s) {
-		a.lastSubID = s.SubTrackID
+func (a *demoApp) toggleSubtitles(s player.Snapshot, now time.Time) {
+	if a.subtitlesShown(s, now) {
+		if s.SubTrackID != 0 {
+			a.lastSubID = s.SubTrackID
+		}
+		a.subWant, a.subHoldUntil = false, now.Add(subtitleHold)
 		a.run("subtitles", a.p.DisableSubtitleTrack, nil)
 		return
 	}
@@ -391,10 +427,11 @@ func (a *demoApp) toggleSubtitles(s player.Snapshot) {
 			id = tr.ID
 		}
 	}
-	a.selectSubtitles(id)
+	a.selectSubtitles(id, now)
 }
 
-func (a *demoApp) selectSubtitles(id int64) {
+func (a *demoApp) selectSubtitles(id int64, now time.Time) {
+	a.subWant, a.subHoldUntil = true, now.Add(subtitleHold)
 	a.run("subtitles", func() error { return a.p.SelectSubtitleTrack(id) }, nil)
 }
 
@@ -425,7 +462,7 @@ func (a *demoApp) anyMenuOpen() bool { return a.speedOpen || a.audioOpen || a.su
 func (a *demoApp) syncWindow(s player.Snapshot) {
 	title, file := appTitle, ""
 	if a.target != "" {
-		title = mediaName(s.MediaTitle, a.target)
+		title = a.name(s)
 	}
 	if isLocalFile(a.target) {
 		file = a.target
@@ -441,6 +478,15 @@ func (a *demoApp) syncWindow(s player.Snapshot) {
 		a.shownFile = file
 		a.win.SetRepresentedFile(file)
 	}
+}
+
+// name is what to call the media open now. While a new file is opening,
+// the title libmpv reports is still the last file's, and is not used.
+func (a *demoApp) name(s player.Snapshot) string {
+	if a.opening {
+		return mediaName("", a.target)
+	}
+	return mediaName(s.MediaTitle, a.target)
 }
 
 // shortcutLabel is how the platform writes a Cmd/Ctrl shortcut.

@@ -360,15 +360,17 @@ func (a *demoApp) moreMenu(c *ui.Context, s player.Snapshot, l layout, speed boo
 		if m.Item("Choose Video…").ID("more-open").Shortcut(ui.Cmd, ui.KeyO).Chosen() {
 			a.chooseVideo()
 		}
-		if speed || len(audio) > 0 {
-			m.Separator()
-		}
+		// Flat sections rather than submenus: a narrow window has no room
+		// beside the menu for a submenu to open.
 		if speed {
-			m.Submenu("Playback Speed", func(m *ui.Menu) { a.speedItems(m, s) })
+			m.Separator()
+			m.Item("Playback Speed").ID("more-speed").Disabled(true)
+			a.speedItems(m, s)
 		}
 		if len(audio) > 0 {
-			names := trackNames(audio)
-			m.Submenu("Audio Track", func(m *ui.Menu) { a.audioItems(m, audio, names) })
+			m.Separator()
+			m.Item("Audio Track").ID("more-audio").Disabled(true)
+			a.audioItems(m, audio, trackNames(audio))
 		}
 	}, a.menuOptions(&a.moreOpen))
 }
@@ -388,7 +390,7 @@ func (a *demoApp) audioItems(m *ui.Menu, audio []player.Track, names []string) {
 }
 
 func (a *demoApp) subtitleMenu(c *ui.Context, s player.Snapshot, subs []player.Track, l layout) {
-	on := subtitlesOn(s)
+	on := a.subtitlesShown(s, time.Now())
 	icon := iconSubtitlesOff
 	if on {
 		icon = iconSubtitlesOn
@@ -398,11 +400,11 @@ func (a *demoApp) subtitleMenu(c *ui.Context, s player.Snapshot, subs []player.T
 	b.PopoverMenuButton(func(m *ui.Menu) {
 		if len(subs) > 0 {
 			if m.Item("Off").ID("sid-off").Checked(!on).Chosen() && on {
-				a.toggleSubtitles(s)
+				a.toggleSubtitles(s, time.Now())
 			}
 			for i, tr := range subs {
 				if m.Item(names[i]).ID(fmt.Sprintf("sid-%d", tr.ID)).Checked(on && tr.Selected).Chosen() {
-					a.selectSubtitles(tr.ID)
+					a.selectSubtitles(tr.ID, time.Now())
 				}
 			}
 			m.Separator()

@@ -52,7 +52,7 @@ func (f *fakePlayer) Open(target string, opts ...player.OpenOptions) error {
 		return nil // libmpv reports load failures asynchronously
 	}
 	f.snap.State, f.snap.Err, f.snap.Paused, f.snap.EOF = player.StatePlaying, nil, false, false
-	f.snap.Position, f.snap.Duration = 10*time.Second, 90*time.Second
+	f.snap.Position, f.snap.Duration, f.snap.Seekable = 10*time.Second, 90*time.Second, true
 	f.snap.VideoWidth, f.snap.VideoHeight = 1280, 720
 	f.snap.MediaTitle = "Big Test Movie"
 	f.snap.Tracks = []player.Track{{ID: 1, Type: player.TrackVideo, Selected: true}}
@@ -84,6 +84,14 @@ func (f *fakePlayer) SetVolume(v float64) error          { f.snap.Volume = v; re
 func (f *fakePlayer) SetMuted(m bool) error              { f.snap.Muted = m; return nil }
 func (f *fakePlayer) SetSpeed(r float64) error           { f.snap.Speed = r; return nil }
 func (f *fakePlayer) SetSubtitlePos(p int) error         { f.subPos = p; return nil }
+
+func (f *fakePlayer) ToggleMute() error {
+	if f.snap.Muted && f.snap.Volume <= 0 {
+		f.snap.Volume = 50
+	}
+	f.snap.Muted = !f.snap.Muted
+	return nil
+}
 
 func (f *fakePlayer) selectTrack(kind player.TrackType, id int64) {
 	for i := range f.snap.Tracks {
@@ -469,26 +477,18 @@ func TestFormatting(t *testing.T) {
 
 func itoa(n int) string { return strconv.Itoa(n) }
 
-func TestClickOnThePicturePlaysAndPauses(t *testing.T) {
+func TestClicksOnThePictureLeavePlaybackAlone(t *testing.T) {
 	a, f, tt := newTestApp(t, 960, 600)
 	a.open("/movies/movie.mkv", nil)
 	tt.Frame()
 	tt.ClickAt(480, 200)
-	tt.Advance(clickDelay + 50*time.Millisecond)
-	if !f.snap.Paused {
-		t.Fatal("a click on the picture should pause")
-	}
-	tt.Advance(time.Second) // past the double-click interval
-	tt.ClickAt(480, 200)
-	tt.Advance(clickDelay + 50*time.Millisecond)
-	if f.snap.Paused {
-		t.Fatal("another click should play")
-	}
-
-	// A double click (full screen) leaves playback alone, also at the end.
 	tt.Advance(time.Second)
-	tt.ClickAtWith(0, 480, 200)
-	tt.ClickAtWith(0, 480, 200)
+	if f.snap.Paused {
+		t.Fatal("a single click on the picture changed playback")
+	}
+	// A double click toggles full screen only, also at the end.
+	tt.ClickAt(480, 200)
+	tt.ClickAt(480, 200)
 	tt.Advance(time.Second)
 	if f.snap.Paused {
 		t.Fatal("a double click paused playback")
@@ -502,6 +502,104 @@ func TestClickOnThePicturePlaysAndPauses(t *testing.T) {
 	if !f.snap.EOF || f.snap.Position != 90*time.Second {
 		t.Fatal("a double click at the end replayed the video")
 	}
+}
+
+// heldQueue returns a command queue whose worker waits until release is
+// called, as libmpv busy loading a file holds it, and drain, which waits
+// for every command to have run.
+func heldQueue() (q *commandQueue, release, drain func()) {
+	q = newCommandQueue()
+	gate := make(chan struct{})
+	q.push("", func() { <-gate })
+	release = func() { close(gate) }
+	drain = func() {
+		done := make(chan struct{})
+		q.push("", func() { close(done) })
+		<-done
+	}
+	return q, release, drain
+}
+
+func TestCommandQueueCoalescesWithoutReordering(t *testing.T) {
+	q, release, drain := heldQueue()
+	var got []string
+	q.push("seek", func() { got = append(got, "seek A") })
+	q.push("", func() { got = append(got, "open B") })
+	q.push("seek", func() { got = append(got, "seek B1") })
+	q.push("seek", func() { got = append(got, "seek B2") })
+	release()
+	drain()
+	if strings.Join(got, ", ") != "seek A, open B, seek B2" {
+		t.Errorf("ran %q; want seeks kept with their file, the latest of a run only", got)
+	}
+	q.stop()
+	ran := false
+	q.push("", func() { ran = true })
+	time.Sleep(20 * time.Millisecond)
+	if ran {
+		t.Error("a stopped queue ran a command")
+	}
+}
+
+func TestQuickTogglesWhilePlayerIsBusy(t *testing.T) {
+	a, f, tt := newTestApp(t, 960, 600)
+	a.open("/movies/movie.mkv", nil)
+	tt.Frame()
+	q, release, drain := heldQueue()
+	a.cmds = q
+	tt.Key(0, ui.KeyC)
+	tt.Key(0, ui.KeyC)
+	tt.Key(0, ui.KeyM)
+	tt.Key(0, ui.KeyM)
+	release()
+	drain()
+	if f.snap.SubTrackID == 0 || f.snap.Muted {
+		t.Errorf("two quick presses each should flip: subtitles track %d, muted %v", f.snap.SubTrackID, f.snap.Muted)
+	}
+}
+
+func TestDropsWhileAVideoIsOpening(t *testing.T) {
+	a, f, tt := newTestApp(t, 960, 600)
+	q, release, drain := heldQueue()
+	a.cmds = q
+	tt.DropFiles(480, 300, "/movies/a.mkv")
+	tt.DropFiles(480, 300, "/movies/a.srt")
+	tt.DropFiles(480, 300, "/docs/readme.txt")
+	tt.Frame()
+	if tt.HasText("Open a video first") || !tt.HasText("Can’t open “readme.txt”") {
+		t.Errorf("drops during an open should count it as playing: %q", tt.Texts())
+	}
+	release()
+	drain()
+	if strings.Join(f.opened, ",") != "/movies/a.mkv" || strings.Join(f.added, ",") != "/movies/a.srt" {
+		t.Errorf("opened %v, added %v; want the video, then its subtitles", f.opened, f.added)
+	}
+}
+
+func TestCompactMoreMenuStaysInTheWindow(t *testing.T) {
+	f := newFakePlayer()
+	a := newDemoApp(f, func(c *ui.Context) ui.Element { return ui.Box(c).Background(stageBlack) })
+	tt := ui.NewTesterWith(a.view, 320, 400, ui.TesterOptions{Preferences: ui.Preferences{Pointer: ui.PointerCoarse, TextScale: 1}})
+	tt.Frame()
+	a.open("/movies/movie.mkv", nil)
+	tt.Frame()
+	tt.Advance(time.Second)
+	if err := tt.Click("More"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Advance(time.Second)
+	if !visible(tt, "Normal") || !visible(tt, "Choose Video…") {
+		t.Fatalf("compact More menu lacks the speed choices: %q", tt.Texts())
+	}
+	for _, n := range tt.AccessAll() {
+		if n.Role != ui.RoleMenuItem && n.Role != ui.RoleMenuItemCheckBox {
+			continue
+		}
+		if n.Bounds.X < 0 || n.Bounds.X+n.Bounds.W > 320.5 || n.Bounds.Y < 0 || n.Bounds.Y+n.Bounds.H > 400.5 {
+			t.Errorf("%q outside the window: %+v", n.Name, n.Bounds)
+		}
+	}
+	snapshot(t, tt, "more-compact")
 }
 
 func TestDraggingOffTheSeekBarStaysThrottled(t *testing.T) {
@@ -613,9 +711,9 @@ func TestAudioOnlyKeepsControls(t *testing.T) {
 func TestLiveStreamHasNoSeeking(t *testing.T) {
 	a, f, tt := newTestApp(t, 960, 600)
 	a.open("https://live.test/stream.m3u8", nil)
-	f.snap.Duration = 0
+	f.snap.Duration, f.snap.Seekable = 3*time.Second, false // libmpv's buffered "duration"
 	tt.Frame()
-	if visible(tt, "Back 5 Seconds") || tt.HasText("-0:00") {
+	if visible(tt, "Back 5 Seconds") || tt.HasText("-0:00") || tt.HasText("-0:03") {
 		t.Errorf("live stream shows seeking it can't do: %q", tt.Texts())
 	}
 	pos := f.snap.Position
