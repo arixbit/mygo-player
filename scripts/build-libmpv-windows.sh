@@ -319,6 +319,11 @@ else
 fi
 
 fetch_tar "https://github.com/mpv-player/mpv/archive/refs/tags/v${MPV_VER}.tar.gz" "$SRC_DIR/mpv"
+# On Windows ARM64, mingw-w64's <winnt.h> defines MemoryBarrier() as a
+# function-like macro, which collides with gl->MemoryBarrier(...) in ra_gl.c.
+if [[ -f "$SRC_DIR/mpv/video/out/opengl/common.h" ]]; then
+  sed -i '/#include <windows\.h>/a #undef MemoryBarrier' "$SRC_DIR/mpv/video/out/opengl/common.h"
+fi
 meson setup "$BUILD_DIR_WIN/mpv" "$(cygpath -m "$SRC_DIR/mpv")" \
   --prefix="$PREFIX_WIN" --libdir=lib --buildtype=release \
   --default-library=shared \
