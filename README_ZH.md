@@ -6,6 +6,10 @@
 
 `mygo-player` 采用与 MyGo 官方原生插件一致的架构（内置 `mygo-plugin.json`、通过 `mygo/ffi` 动态加载，提供 `Load`、`LibraryPath`、`New`、`View` 等简洁接口）。视频画面直接绘制在 MyGo 的原生 UI 图层中，而不是覆盖在最顶层的系统子窗口，因此播放控制栏、弹幕、圆角裁切、弹出菜单等 UI 元素始终都能自然叠在视频上方，不会出现遮挡。
 
+![mygo-player 示例播放器：4K MKV 播放、字幕与原生音轨菜单叠层效果](docs/screenshot.webp)
+
+<sub>示例播放器（`examples/player`）实际播放 4K MKV 画面，展示字幕渲染、悬浮控制栏以及直接叠在视频上方的原生音轨切换菜单。演示片段：*Big Buck Bunny*（© 2008 Blender Foundation，CC-BY 3.0）。</sub>
+
 ## 为什么选择 `mygo-player`？与内置 `ui/video` 的区别
 
 MyGo 内置的 `ui/video` 直接调用各操作系统的原生媒体框架（AVFoundation、Media Foundation、GStreamer 和浏览器 `<video>`），不需要附带额外动态库，非常适合播放轻量的 MP4/H.264 片段或网页端应用。如果你的桌面应用需要更完整的播放器能力，`mygo-player` 正好作为它的补充：

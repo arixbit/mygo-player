@@ -6,6 +6,10 @@ Standalone native UI video player plugin for [MyGo](https://github.com/egoist/my
 
 `mygo-player` follows the same plugin layout as official MyGo native plugins (`mygo-plugin.json`, `mygo/ffi`, `Load`, `LibraryPath`, `New`, `View`). Frames render directly inside MyGo's native UI scene graph—never as a separate native child window—so HUD controls, danmaku, rounded corners, and popovers always composite cleanly above the video.
 
+![mygo-player example playing a 4K MKV with subtitles and native audio track menu](docs/screenshot.webp)
+
+<sub>Example player (`examples/player`) playing a 4K MKV with subtitles and a native audio track menu composited cleanly above the video. Sample footage: *Big Buck Bunny* (© 2008 Blender Foundation, CC-BY 3.0).</sub>
+
 ## Why `mygo-player` vs Built-in `ui/video`?
 
 MyGo's built-in `ui/video` wraps each OS's media framework (AVFoundation, Media Foundation, GStreamer, and browser `<video>`). It requires no extra native library and is ideal for simple MP4/H.264 clips or web builds. `mygo-player` complements `ui/video` when your desktop app needs full media-player features:
