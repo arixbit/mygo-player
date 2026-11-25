@@ -478,6 +478,12 @@ func (p *Player) playLocked() error {
 		if err := p.client.Command("seek", "0", "absolute"); err != nil {
 			return err
 		}
+		// No longer at the end, before libmpv reports it, so a TogglePause
+		// right after this pauses the replay instead of replaying again.
+		p.mu.Lock()
+		p.snap.EOF = false
+		p.recomputeStateLocked()
+		p.mu.Unlock()
 	}
 	return p.client.SetPropertyFlag("pause", false)
 }

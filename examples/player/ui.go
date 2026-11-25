@@ -4,6 +4,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	player "github.com/arixbit/mygo-player"
@@ -103,6 +104,11 @@ func (a *demoApp) view(c *ui.Context) {
 		c.After(hideChromeAfter - idleFor)
 	}
 	a.chromeShown = chrome
+	if a.recent != "" && !a.opening && (snap.State == player.StatePlaying || snap.State == player.StatePaused) {
+		path := a.recent
+		a.recent = ""
+		go func() { _ = mygo.App.AddRecentDocument(path) }() // it writes a file
+	}
 
 	bg := c.Theme().Background
 	if has || failed {

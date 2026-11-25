@@ -92,7 +92,7 @@ func (a *demoApp) seekRow(c *ui.Context, s player.Snapshot, now time.Time) {
 func (a *demoApp) seekBar(c *ui.Context, s player.Snapshot, pos, dur float64, now time.Time) {
 	const pad = 6
 	val := pos
-	seekable := dur > 0
+	seekable := seekable(s)
 	if !seekable {
 		a.scrubbing = false
 	}
@@ -339,12 +339,27 @@ func (a *demoApp) speedMenu(c *ui.Context, s player.Snapshot, l layout) {
 	b.PopoverMenuButton(func(m *ui.Menu) { a.speedItems(m, s) }, a.menuOptions(&a.speedOpen))
 }
 
+// speedName names a speed in menus: "Normal" for 1×.
+func speedName(rate float64) string {
+	if absDiff(rate, 1) < 0.001 {
+		return "Normal"
+	}
+	return speedLabel(rate)
+}
+
+// nextSpeed is the speed after rate in the menu's list, wrapping around.
+func nextSpeed(rate float64) float64 {
+	for _, spd := range speeds {
+		if spd > rate+0.001 {
+			return spd
+		}
+	}
+	return speeds[0]
+}
+
 func (a *demoApp) speedItems(m *ui.Menu, s player.Snapshot) {
 	for _, spd := range speeds {
-		name := speedLabel(spd)
-		if spd == 1 {
-			name = "Normal"
-		}
+		name := speedName(spd)
 		if m.Item(name).ID(fmt.Sprintf("speed-%g", spd)).Checked(absDiff(s.Speed, spd) < 0.001).Chosen() {
 			a.setSpeed(spd)
 		}
@@ -360,17 +375,41 @@ func (a *demoApp) moreMenu(c *ui.Context, s player.Snapshot, l layout, speed boo
 		if m.Item("Choose Video…").ID("more-open").Shortcut(ui.Cmd, ui.KeyO).Chosen() {
 			a.chooseVideo()
 		}
-		// Flat sections rather than submenus: a narrow window has no room
-		// beside the menu for a submenu to open.
-		if speed {
+		// No submenus: a narrow window has no room beside the menu for one
+		// to open. Sections of choices where the window is tall enough,
+		// else one row each that steps to the next choice.
+		names := trackNames(audio)
+		if l.h >= 480 {
+			if speed {
+				m.Separator()
+				m.Item("Playback Speed").ID("more-speed").Disabled(true)
+				a.speedItems(m, s)
+			}
+			if len(audio) > 0 {
+				m.Separator()
+				m.Item("Audio Track").ID("more-audio").Disabled(true)
+				a.audioItems(m, audio, names)
+			}
+			return
+		}
+		if speed || len(audio) > 0 {
 			m.Separator()
-			m.Item("Playback Speed").ID("more-speed").Disabled(true)
-			a.speedItems(m, s)
+		}
+		if speed {
+			if m.Item("Speed: " + speedName(s.Speed)).ID("more-speed-next").Chosen() {
+				a.setSpeed(nextSpeed(s.Speed))
+			}
 		}
 		if len(audio) > 0 {
-			m.Separator()
-			m.Item("Audio Track").ID("more-audio").Disabled(true)
-			a.audioItems(m, audio, trackNames(audio))
+			cur := 0
+			for i, tr := range audio {
+				if tr.Selected {
+					cur = i
+				}
+			}
+			if m.Item("Audio: " + names[cur]).ID("more-audio-next").Chosen() {
+				a.selectAudio(audio[(cur+1)%len(audio)].ID)
+			}
 		}
 	}, a.menuOptions(&a.moreOpen))
 }

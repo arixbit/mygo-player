@@ -460,6 +460,8 @@ func TestFormatting(t *testing.T) {
 		{mediaName("", "/a/what?.mkv"), "what?.mkv"},
 		{mediaName("abc", "https://x.test/movie.mkv?token=EXAMPLE%2Fabc"), "movie.mkv"},
 		{mediaName("cap tions.mkv?token=X", "https://x.test/cap%20tions.mkv?token=X"), "cap tions.mkv"},
+		{mediaName("watch.mkv?token=EXAMPLE", "https://x.test/watch"), "watch.mkv"},
+		{mediaName("What? A Film", "https://x.test/watch"), "What? A Film"},
 		{friendlyError(errors.New("mpv playback: unrecognized file format (-17)")), "Unrecognized file format."},
 		{friendlyError(errors.New("player: closed")), "Closed."},
 	} {
@@ -590,8 +592,8 @@ func TestCompactMoreMenuStaysInTheWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Advance(time.Second)
-	if !visible(tt, "Normal") || !visible(tt, "Choose Video…") {
-		t.Fatalf("compact More menu lacks the speed choices: %q", tt.Texts())
+	if !visible(tt, "Speed: Normal") || !visible(tt, "Audio: English") || !visible(tt, "Choose Video…") {
+		t.Fatalf("compact More menu lacks speed and audio: %q", tt.Texts())
 	}
 	for _, n := range tt.AccessAll() {
 		if n.Role != ui.RoleMenuItem && n.Role != ui.RoleMenuItemCheckBox {
@@ -602,6 +604,46 @@ func TestCompactMoreMenuStaysInTheWindow(t *testing.T) {
 		}
 	}
 	snapshot(t, tt, "more-compact")
+	if err := tt.Click("Speed: Normal"); err != nil {
+		t.Fatal(err)
+	}
+	if f.snap.Speed != 1.25 {
+		t.Errorf("stepping the speed gave %v, want 1.25", f.snap.Speed)
+	}
+}
+
+func TestOpenCompletionsSpeakForThemselves(t *testing.T) {
+	a, _, tt := newTestApp(t, 960, 600)
+	q, release, drain := heldQueue()
+	a.cmds = q
+	a.open("/movies/b.mkv", nil)
+	a.open("https://x.test/a.mkv?token=SECRET", nil)
+	a.open("/movies/b.mkv", nil)
+	release()
+	// The first two finish while the last is still queued behind them.
+	q.push("", func() {})
+	drain()
+	tt.Frame()
+	if a.opening {
+		t.Error("the last open finished but still counts as opening")
+	}
+}
+
+func TestSubtitleTogglesWhileBusyAreKept(t *testing.T) {
+	a, f, tt := newTestApp(t, 960, 600)
+	a.open("/movies/movie.mkv", nil)
+	tt.Frame()
+	q, release, drain := heldQueue()
+	a.cmds = q
+	tt.Key(0, ui.KeyC)
+	tt.Advance(900 * time.Millisecond) // longer than the hold, still queued
+	tt.Key(0, ui.KeyC)
+	release()
+	drain()
+	tt.Frame()
+	if f.snap.SubTrackID == 0 {
+		t.Error("off then on while libmpv was busy left subtitles off")
+	}
 }
 
 func TestDraggingOffTheSeekBarStaysThrottled(t *testing.T) {

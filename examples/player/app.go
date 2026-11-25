@@ -64,6 +64,8 @@ type demoApp struct {
 
 	target  string // what is open (path or URL), "" when nothing is
 	opening bool   // target's Open is queued or running
+	openGen int    // counts opens, so a finished one only speaks for itself
+	recent  string // local file to add to Open Recent once it plays
 
 	lastActivity time.Time // last pointer movement or key press
 	lastTouch    bool      // the last pointer input came from a finger
@@ -83,7 +85,8 @@ type demoApp struct {
 	volHoldUntil time.Time // show volTarget until then
 
 	subWant      bool      // subtitles on or off as last asked for
-	subHoldUntil time.Time // show subWant until then
+	subHoldUntil time.Time // show subWant until then (after subPending)
+	subPending   int       // subtitle commands queued or running
 
 	lastSubID int64 // subtitle track to bring back when subtitles are turned on
 	lastSpeed float64
@@ -223,22 +226,24 @@ func (a *demoApp) poke(now time.Time) {
 
 // open plays target, with subtitle files to attach. UI thread only.
 func (a *demoApp) open(target string, subs []string) {
+	a.openGen++
+	gen := a.openGen
 	a.target, a.opening = target, true
 	a.scrubbing, a.holdUntil, a.volHoldUntil, a.subHoldUntil = false, time.Time{}, time.Time{}, time.Time{}
 	a.lastSubID = 0
 	a.lastActivity = time.Now()
+	a.recent = ""
+	if isLocalFile(target) && a.win != nil {
+		a.recent = target // recorded once it plays: a file that fails is no recent document
+	}
 	name := mediaName("", target)
-	recent := isLocalFile(target) && a.win != nil
 	a.run("", func() error {
 		err := a.p.Open(target, player.OpenOptions{Subtitles: subs})
 		a.post(func() {
-			if a.target == target {
+			if a.openGen == gen {
 				a.opening = false
 			}
 		})
-		if err == nil && recent {
-			_ = mygo.App.AddRecentDocument(target)
-		}
 		return err
 	}, func(err error) {
 		a.fail(fmt.Sprintf("Couldn’t open “%s”", name), err)
@@ -400,10 +405,25 @@ func subtitlesOn(s player.Snapshot) bool { return s.SubTrackID != 0 && s.SubVisi
 // subtitlesShown is subtitlesOn, or what the user last asked for until
 // playback reports it.
 func (a *demoApp) subtitlesShown(s player.Snapshot, now time.Time) bool {
-	if now.Before(a.subHoldUntil) {
+	if a.subPending > 0 || now.Before(a.subHoldUntil) {
 		return a.subWant
 	}
 	return subtitlesOn(s)
+}
+
+// runSubtitles sends a subtitle command; the choice it makes shows until
+// it ran and playback had a moment to report it.
+func (a *demoApp) runSubtitles(on bool, now time.Time, fn func() error) {
+	a.subWant, a.subPending = on, a.subPending+1
+	a.subHoldUntil = now.Add(subtitleHold)
+	a.run("", func() error {
+		err := fn()
+		a.post(func() {
+			a.subPending--
+			a.subHoldUntil = time.Now().Add(subtitleHold)
+		})
+		return err
+	}, nil)
 }
 
 // toggleSubtitles turns subtitles off, or back on with the track shown last
@@ -413,8 +433,7 @@ func (a *demoApp) toggleSubtitles(s player.Snapshot, now time.Time) {
 		if s.SubTrackID != 0 {
 			a.lastSubID = s.SubTrackID
 		}
-		a.subWant, a.subHoldUntil = false, now.Add(subtitleHold)
-		a.run("subtitles", a.p.DisableSubtitleTrack, nil)
+		a.runSubtitles(false, now, a.p.DisableSubtitleTrack)
 		return
 	}
 	subs := filterByType(s.Tracks, player.TrackSub)
@@ -431,8 +450,7 @@ func (a *demoApp) toggleSubtitles(s player.Snapshot, now time.Time) {
 }
 
 func (a *demoApp) selectSubtitles(id int64, now time.Time) {
-	a.subWant, a.subHoldUntil = true, now.Add(subtitleHold)
-	a.run("subtitles", func() error { return a.p.SelectSubtitleTrack(id) }, nil)
+	a.runSubtitles(true, now, func() error { return a.p.SelectSubtitleTrack(id) })
 }
 
 func (a *demoApp) selectAudio(id int64) {

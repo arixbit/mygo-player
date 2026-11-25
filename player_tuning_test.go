@@ -354,3 +354,23 @@ func TestTogglePauseQuickPairsAndSeekable(t *testing.T) {
 		t.Error("Seekable should reset when the media is stopped")
 	}
 }
+
+func TestTogglePausePairAtEOF(t *testing.T) {
+	ffmpeg := requireLibMPVAndFFmpeg(t)
+	clip := genClip(t, ffmpeg, "eof-toggle.mkv", clipSpec{dur: 1})
+	p := newTestPlayer(t, Options{})
+	if err := p.Open(clip); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	waitFor(t, 8*time.Second, "EOF", func() bool { return p.Snapshot().State == StateEnded })
+	// Replay, then pause right away: the second press must pause.
+	if err := p.TogglePause(); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.TogglePause(); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := p.GetPropertyString("pause"); v != "yes" {
+		t.Fatalf("pause after replay+toggle at EOF = %q, want yes", v)
+	}
+}

@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -99,8 +100,10 @@ func main() {
 			Content:   ui.View(app.view),
 		})
 		app.win.OnClosed(func() {
-			app.cmds.stop() // drop what waits: at most the running command delays Close
-			_ = p.Close()
+			app.cmds.stop() // drop what waits
+			// Close waits for a command libmpv may still be running (a slow
+			// subtitle download): let it, off the UI thread.
+			go func() { _ = p.Close() }()
 		})
 
 		// The file the app was launched with, from the command line or the
@@ -128,11 +131,16 @@ func main() {
 // is ready, then hands them to it. The file given on the command line is
 // skipped once if the desktop passes it too.
 type launchFiles struct {
-	mu      sync.Mutex
-	app     *demoApp
-	queue   []string
-	skipArg string // the command line's file, not yet seen from the desktop
+	mu        sync.Mutex
+	app       *demoApp
+	queue     []string
+	arg       string    // the command line's file
+	skipUntil time.Time // the desktop's copies of arg are ignored until then
 }
+
+// launchEcho is how long after startup the desktop may still pass on the
+// file the app was launched with.
+const launchEcho = 3 * time.Second
 
 func (l *launchFiles) open(path string) {
 	l.mu.Lock()
@@ -140,8 +148,8 @@ func (l *launchFiles) open(path string) {
 	switch {
 	case app == nil:
 		l.queue = append(l.queue, path)
-	case l.skipArg != "" && samePath(path, l.skipArg):
-		l.skipArg, app = "", nil
+	case l.arg != "" && samePath(path, l.arg) && time.Now().Before(l.skipUntil):
+		app = nil // the launch file again, not a new request
 	}
 	l.mu.Unlock()
 	if app != nil {
@@ -154,11 +162,10 @@ func (l *launchFiles) open(path string) {
 func (l *launchFiles) attach(app *demoApp, arg string) []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.app, l.skipArg = app, arg
+	l.app, l.arg, l.skipUntil = app, arg, time.Now().Add(launchEcho)
 	var q []string
 	for _, p := range l.queue {
-		if l.skipArg != "" && samePath(p, l.skipArg) {
-			l.skipArg = ""
+		if arg != "" && samePath(p, arg) {
 			continue
 		}
 		q = append(q, p)

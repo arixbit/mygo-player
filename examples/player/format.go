@@ -155,6 +155,13 @@ func mediaName(title, target string) string {
 	if title == "" || fromURL(title, target) {
 		return clean
 	}
+	// A playlist entry's title can be a file name with its own query.
+	if i := strings.IndexAny(title, "?#"); i > 0 {
+		head := title[:i]
+		if !strings.Contains(head, " ") && path.Ext(head) != "" && strings.Contains(title[i:], "=") {
+			return path.Base(head)
+		}
+	}
 	return title
 }
 
