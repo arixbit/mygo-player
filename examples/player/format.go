@@ -149,10 +149,25 @@ func mediaName(title, target string) string {
 	} else if i := strings.IndexAny(raw, "?#"); i >= 0 {
 		clean = raw[:i]
 	}
-	if title == "" || title == raw || title == target || strings.ContainsAny(title, "?#") && strings.HasPrefix(title, clean) {
+	// libmpv names a stream without a title after its URL (percent-decoded,
+	// from the last slash, which may be inside the query): any title found
+	// in the URL is that, and only a title of the media's own is shown.
+	if title == "" || fromURL(title, target) {
 		return clean
 	}
 	return title
+}
+
+// fromURL reports whether title is part of url as written or decoded.
+func fromURL(title, u string) bool {
+	if strings.Contains(u, title) {
+		return true
+	}
+	if d, err := url.QueryUnescape(u); err == nil && strings.Contains(d, title) {
+		return true
+	}
+	d, err := url.PathUnescape(u)
+	return err == nil && strings.Contains(d, title)
 }
 
 // isLocalFile reports whether target is a path rather than a URL.

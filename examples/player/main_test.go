@@ -458,6 +458,8 @@ func TestFormatting(t *testing.T) {
 		{mediaName("movie.mkv?token=SECRET", "https://x.test/movie.mkv?token=SECRET"), "movie.mkv"},
 		{mediaName("Real Title", "https://x.test/movie.mkv?token=SECRET"), "Real Title"},
 		{mediaName("", "/a/what?.mkv"), "what?.mkv"},
+		{mediaName("abc", "https://x.test/movie.mkv?token=EXAMPLE%2Fabc"), "movie.mkv"},
+		{mediaName("cap tions.mkv?token=X", "https://x.test/cap%20tions.mkv?token=X"), "cap tions.mkv"},
 		{friendlyError(errors.New("mpv playback: unrecognized file format (-17)")), "Unrecognized file format."},
 		{friendlyError(errors.New("player: closed")), "Closed."},
 	} {

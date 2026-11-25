@@ -33,6 +33,11 @@ func TestTrackDisplayName(t *testing.T) {
 			"captions.srt",
 		},
 		{
+			"external URL, decoded title with query",
+			Track{ID: 3, Title: "cap tions.srt?token=SECRET", External: true, ExternalFilename: "https://cdn.test/cap%20tions.srt?token=SECRET"},
+			"cap tions.srt",
+		},
+		{
 			"external with real title",
 			Track{ID: 1, Title: "Signs & Songs", External: true, ExternalFilename: "/movies/signs.ass"},
 			"Signs & Songs",

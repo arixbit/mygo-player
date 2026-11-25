@@ -30,7 +30,8 @@ func (t Track) DisplayName() string {
 	// libmpv titles external subtitles by their file name, or the part of
 	// it that differs from the video ("srt", "en.srt"), which is noise;
 	// for a URL it includes the query, which may carry credentials.
-	if file != "" && (title == "" || strings.HasSuffix(strings.ToLower(raw), strings.ToLower(title))) {
+	if file != "" && (title == "" || strings.HasSuffix(strings.ToLower(raw), strings.ToLower(title)) ||
+		strings.Contains(t.ExternalFilename, "://") && inURL(title, t.ExternalFilename)) {
 		title = file
 	}
 	if title != "" && !strings.EqualFold(title, lang) && !strings.EqualFold(title, t.Lang) {
@@ -51,7 +52,7 @@ func (t Track) DisplayName() string {
 func externalName(name string) (shown, raw string) {
 	if strings.Contains(name, "://") {
 		raw = name[strings.LastIndex(name, "/")+1:]
-		if u, err := url.Parse(name); err == nil {
+		if u, err := url.Parse(name); err == nil { // Path is decoded
 			if b := path.Base(u.Path); b != "." && b != "/" {
 				return b, raw
 			}
@@ -64,6 +65,19 @@ func externalName(name string) (shown, raw string) {
 	}
 	b := filepath.Base(name)
 	return b, b
+}
+
+// inURL reports whether title is part of u as written or percent-decoded,
+// as libmpv's titles for URLs are.
+func inURL(title, u string) bool {
+	if strings.Contains(u, title) {
+		return true
+	}
+	if d, err := url.QueryUnescape(u); err == nil && strings.Contains(d, title) {
+		return true
+	}
+	d, err := url.PathUnescape(u)
+	return err == nil && strings.Contains(d, title)
 }
 
 // LanguageName returns the English name of an ISO 639-1 ("ja") or ISO 639-2
