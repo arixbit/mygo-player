@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"net/url"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -89,36 +91,68 @@ func isSubtitleFile(path string) bool {
 	return subtitleExts[strings.ToLower(filepath.Ext(path))]
 }
 
-// splitDropped sorts dropped or opened paths into the first video (anything
-// that is not a subtitle file) and the subtitle files.
-func splitDropped(paths []string) (video string, subs []string) {
+// videoExtensions are the extensions of media files the player opens from a
+// drop without asking: video, and audio, which libmpv plays too.
+var videoExtensions = []string{
+	"mkv", "mk3d", "mp4", "m4v", "mov", "webm", "avi", "ts", "m2ts", "mts", "flv", "f4v", "wmv", "asf",
+	"mpg", "mpeg", "vob", "ogv", "ogm", "3gp", "3g2", "rm", "rmvb", "divx", "mxf", "y4m",
+	"mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "wma", "alac", "aiff", "ape",
+}
+
+var videoExts = func() map[string]bool {
+	m := map[string]bool{}
+	for _, e := range videoExtensions {
+		m["."+e] = true
+	}
+	return m
+}()
+
+// splitDropped sorts dropped or opened paths into the first media file, the
+// first file that is neither media nor subtitles, and the subtitle files.
+func splitDropped(paths []string) (video, other string, subs []string) {
 	for _, p := range paths {
+		ext := strings.ToLower(filepath.Ext(p))
 		switch {
 		case isSubtitleFile(p):
 			subs = append(subs, p)
-		case video == "":
-			video = p
+		case videoExts[ext] || strings.Contains(p, "://"):
+			if video == "" {
+				video = p
+			}
+		case other == "":
+			other = p
 		}
 	}
-	return video, subs
+	return video, other, subs
 }
 
 // mediaName is what to call the media: its title when it has one, else its
-// file name (or the last part of its URL).
+// file name, or the last part of its URL's path. Query strings and
+// fragments of URLs, which may carry credentials, never show, also when
+// libmpv made the title from the URL.
 func mediaName(title, target string) string {
-	if title != "" {
-		return title
+	if !strings.Contains(target, "://") {
+		if title != "" {
+			return title
+		}
+		if target == "" {
+			return ""
+		}
+		return filepath.Base(target)
 	}
-	if target == "" {
-		return ""
+	clean, raw := target, target[strings.LastIndex(target, "/")+1:]
+	if u, err := url.Parse(target); err == nil {
+		clean = u.Host
+		if b := path.Base(u.Path); b != "." && b != "/" && b != "" {
+			clean = b
+		}
+	} else if i := strings.IndexAny(raw, "?#"); i >= 0 {
+		clean = raw[:i]
 	}
-	if i := strings.IndexAny(target, "?#"); i > 0 && strings.Contains(target, "://") {
-		target = target[:i]
+	if title == "" || title == raw || title == target || strings.ContainsAny(title, "?#") && strings.HasPrefix(title, clean) {
+		return clean
 	}
-	if b := filepath.Base(strings.TrimRight(target, "/")); b != "." && b != "/" {
-		return b
-	}
-	return target
+	return title
 }
 
 // isLocalFile reports whether target is a path rather than a URL.

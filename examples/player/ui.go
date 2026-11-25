@@ -84,7 +84,7 @@ func (a *demoApp) view(c *ui.Context) {
 		return false
 	})
 	if dropped := root.DroppedFiles(); len(dropped) > 0 {
-		a.openPaths(dropped)
+		a.openPaths(dropped, false)
 		snap = a.p.Snapshot()
 		has = a.hasMedia(snap)
 	}
@@ -92,8 +92,11 @@ func (a *demoApp) view(c *ui.Context) {
 
 	// The controls show while the user is doing something, and whenever
 	// they are what the user needs: paused, ended, in a menu, dragging.
+	// Audio alone has no picture to keep clear: its controls stay.
+	audioOnly := has && snap.State != player.StateLoading && len(snap.Tracks) > 0 &&
+		snap.VideoWidth == 0 && len(filterByType(snap.Tracks, player.TrackVideo)) == 0
 	pinned := snap.Paused || snap.State == player.StateEnded || a.anyMenuOpen() ||
-		a.scrubbing || a.volDragging || a.hudHot || dragOver
+		a.scrubbing || a.volDragging || a.hudHot || dragOver || audioOnly
 	idleFor := now.Sub(a.lastActivity)
 	chrome := has && (pinned || idleFor < hideChromeAfter)
 	if has && !pinned && chrome {
@@ -119,7 +122,7 @@ func (a *demoApp) view(c *ui.Context) {
 		ui.Box(c.Key("cover")).Absolute().Fill().Background(bg).IgnoreInput(true).
 			AnimatePose(ui.Pose{Fade: cover}, motionStage)
 
-		a.hitLayer(c, has, chrome)
+		a.hitLayer(c, has, chrome, now)
 		a.liftSubtitles(c, root, snap, has, chrome, l)
 
 		// Things in the middle of the stage.
@@ -127,6 +130,8 @@ func (a *demoApp) view(c *ui.Context) {
 			switch {
 			case !has && !failed:
 				a.welcome(c, dragOver, l)
+			case audioOnly:
+				a.nowPlaying(c, snap, l)
 			}
 		})
 		ui.Themed(c, a.hudTheme(c)).Absolute().Fill().Background(ui.Transparent).PassThrough().Children(func() {
@@ -173,21 +178,25 @@ func (a *demoApp) shortcuts(c *ui.Context, s player.Snapshot, has bool, now time
 	case (c.Shortcut(0, ui.KeySpace) || c.Shortcut(0, ui.KeyK)) && !c.ShortcutRepeated():
 		a.togglePlay()
 	case c.Shortcut(0, ui.KeyLeft):
-		a.skip(-skipStep)
+		a.skip(s, -skipStep)
 	case c.Shortcut(0, ui.KeyRight):
-		a.skip(skipStep)
+		a.skip(s, skipStep)
 	case c.Shortcut(0, ui.KeyUp):
-		a.changeVolume(s, volumeStep)
+		a.changeVolume(s, volumeStep, now)
 	case c.Shortcut(0, ui.KeyDown):
-		a.changeVolume(s, -volumeStep)
+		a.changeVolume(s, -volumeStep, now)
 	case c.Shortcut(0, ui.KeyM) && !c.ShortcutRepeated():
-		a.toggleMute()
+		a.toggleMute(s, now)
 	case c.Shortcut(0, ui.KeyC) && !c.ShortcutRepeated():
 		a.toggleSubtitles(s)
 	case c.Shortcut(0, ui.KeyF) && !c.ShortcutRepeated():
 		a.toggleFullScreen()
 	case a.fullScreen() && c.Shortcut(0, ui.KeyEscape):
 		a.toggleFullScreen()
+	case !a.chromeShown && (c.Shortcut(0, ui.KeyTab) || c.Shortcut(ui.Shift, ui.KeyTab)):
+		// The controls are out of reach while hidden: Tab brings them
+		// back with the focus on the play button.
+		a.focusPlay = true
 	default:
 		acted = false
 	}
@@ -197,10 +206,16 @@ func (a *demoApp) shortcuts(c *ui.Context, s player.Snapshot, has bool, now time
 }
 
 // hitLayer takes clicks on the picture: a click plays or pauses, a double
-// click toggles full screen. With touch, a tap shows or hides the controls.
-func (a *demoApp) hitLayer(c *ui.Context, has, chrome bool) {
+// click toggles full screen and leaves playback as it was. With touch, a tap
+// shows or hides the controls.
+//
+// A click waits clickDelay for a second one before it acts, so a double
+// click usually does nothing to playback; a slower double click undoes the
+// first click's toggle instead.
+func (a *demoApp) hitLayer(c *ui.Context, has, chrome bool, now time.Time) {
 	hit := ui.Box(c.Key("hit")).Absolute().Fill().AccessHidden(true)
 	if !has {
+		a.pendingClick = time.Time{}
 		return
 	}
 	if !chrome && c.Preferences().Hover() {
@@ -209,16 +224,29 @@ func (a *demoApp) hitLayer(c *ui.Context, has, chrome bool) {
 	double, click := hit.DoubleClicked(), hit.Clicked()
 	switch {
 	case double && !a.lastTouch:
-		a.togglePlay() // undo the first click's toggle
+		if a.pendingClick.IsZero() && now.Sub(a.clickActed) < time.Second {
+			a.togglePlay() // the first click already acted: undo it
+		}
+		a.pendingClick, a.skipClick = time.Time{}, true
 		a.toggleFullScreen()
+	case click && a.skipClick:
+		a.skipClick = false // the release of the double click's second press
 	case click && a.lastTouch:
 		if chrome {
 			a.lastActivity = time.Time{}
 		} else {
-			a.lastActivity = time.Now()
+			a.lastActivity = now
 		}
 	case click:
-		a.togglePlay()
+		a.pendingClick = now
+	}
+	if !a.pendingClick.IsZero() {
+		if wait := clickDelay - now.Sub(a.pendingClick); wait > 0 {
+			c.After(wait)
+		} else {
+			a.pendingClick, a.clickActed = time.Time{}, now
+			a.togglePlay()
+		}
 	}
 }
 
@@ -235,6 +263,11 @@ func (a *demoApp) liftSubtitles(c *ui.Context, root ui.Element, s player.Snapsho
 		anim = motionChromeOut
 	}
 	pos := int(math.Round(float64(root.AnimateTo("sub-pos", target, anim))))
+	if !subtitlesOn(s) {
+		// Nothing to move: leave libmpv alone until subtitles show, and
+		// then put them where they belong at once.
+		pos = 100
+	}
 	if pos != a.subPosSet && (has || a.subPosSet != 0) {
 		a.subPosSet = pos
 		a.applySubPos(max(0, min(pos, 150)))
@@ -316,7 +349,7 @@ func (a *demoApp) titleBar(c *ui.Context, s player.Snapshot, shown bool, l layou
 
 func (a *demoApp) dropTarget(c *ui.Context, l layout) {
 	ui.Column(c.Key("drop")).Absolute().Top(l.margin).Left(l.margin).Right(l.margin).Bottom(l.margin).
-		Center().Gap(8).Padding(24).Radius(20).Background(ui.RGBA(0, 0, 0, 0.6)).
+		Center().Gap(8).Padding(24).Radius(20).Background(scrim(c)).
 		Border(2, c.Theme().Accent).BorderStyle(ui.BorderDashed).IgnoreInput(true).
 		Transition(overlayTransition).Children(func() {
 		ui.Icon(c, iconDrop).FontSize(36).TextColor(hudText)
@@ -324,6 +357,25 @@ func (a *demoApp) dropTarget(c *ui.Context, l layout) {
 		ui.Text(c, "A video replaces what’s playing. Subtitle files are added to it.").
 			FontSize(13).TextColor(hudMuted).TextAlign(ui.Center)
 	})
+}
+
+// nowPlaying names what plays when it has no picture, as music.
+func (a *demoApp) nowPlaying(c *ui.Context, s player.Snapshot, l layout) {
+	ui.Column(c.Key("now-playing")).Center().Gap(12).MaxWidth(min(480, l.w-2*l.margin)).
+		Transition(overlayTransition).IgnoreInput(true).Children(func() {
+		ui.Icon(c, iconMusic).FontSize(56).TextColor(hudMuted)
+		ui.Text(c, mediaName(s.MediaTitle, a.target)).FontSize(20).Bold().TextColor(hudText).
+			TextAlign(ui.Center).ContentTransition(contentSwap)
+	})
+}
+
+// scrim darkens the picture under an overlay, opaque when the desktop
+// asks for less transparency.
+func scrim(c *ui.Context) ui.Color {
+	if c.Preferences().ReduceTransparency {
+		return ui.RGB(16, 16, 18)
+	}
+	return ui.RGBA(0, 0, 0, 0.6)
 }
 
 func (a *demoApp) toasts(c *ui.Context) {

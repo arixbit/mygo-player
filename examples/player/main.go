@@ -21,6 +21,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -62,6 +63,12 @@ func main() {
 		subs = append(subs, *subPath)
 	}
 
+	// Files opened from Finder / Explorer ("Open With") play here too. The
+	// listener must be in place before Run to receive the file that
+	// launched the app, which arrives before the window exists.
+	launch := &launchFiles{}
+	mygo.App.OnOpenFile(launch.open)
+
 	mygo.App.WhenReady(func() {
 		p, err := player.New(player.Options{
 			// Headers, User-Agent and Referer given on the command line
@@ -80,7 +87,7 @@ func main() {
 		}
 
 		app := newDemoApp(p, func(c *ui.Context) ui.Element { return player.View(c, p) })
-		app.startSubPosWorker()
+		app.cmds = newCommandQueue()
 		app.win = mygo.NewWindow(mygo.WindowOptions{
 			Title:     appTitle,
 			Width:     1120,
@@ -91,16 +98,51 @@ func main() {
 			Content:   ui.View(app.view),
 		})
 		app.win.OnClosed(func() { _ = p.Close() })
-		// Files opened from Finder / Explorer ("Open With") play here too.
-		mygo.App.OnOpenFile(func(path string) {
-			app.post(func() { app.openPaths([]string{path}) })
-		})
+
+		var arg string
 		if flag.NArg() > 0 {
-			app.open(flag.Arg(0), subs)
+			arg = flag.Arg(0)
+		}
+		// The file the app was launched with, from the command line or the
+		// desktop, once: the system may pass it both ways.
+		if paths := launch.attach(app); len(paths) > 0 {
+			app.openPaths(paths, true)
+		} else if arg != "" {
+			app.open(arg, subs)
 		}
 	})
 
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// launchFiles holds files the desktop opens with the app until its window
+// is ready, then hands them to it.
+type launchFiles struct {
+	mu    sync.Mutex
+	app   *demoApp
+	queue []string
+}
+
+func (l *launchFiles) open(path string) {
+	l.mu.Lock()
+	app := l.app
+	if app == nil {
+		l.queue = append(l.queue, path)
+	}
+	l.mu.Unlock()
+	if app != nil {
+		app.post(func() { app.openPaths([]string{path}, true) })
+	}
+}
+
+// attach hands later files to app and returns those that came before.
+func (l *launchFiles) attach(app *demoApp) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.app = app
+	q := l.queue
+	l.queue = nil
+	return q
 }

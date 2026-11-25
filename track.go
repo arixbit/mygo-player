@@ -1,6 +1,8 @@
 package player
 
 import (
+	"net/url"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -21,13 +23,14 @@ func (t Track) DisplayName() string {
 		parts = append(parts, lang)
 	}
 	title := strings.TrimSpace(t.Title)
-	file := ""
+	file, raw := "", ""
 	if t.External && t.ExternalFilename != "" {
-		file = filepath.Base(t.ExternalFilename)
+		file, raw = externalName(t.ExternalFilename)
 	}
-	// libmpv titles auto-loaded external subtitles by the part of the file
-	// name that differs from the video ("srt", "en.srt"), which is noise.
-	if file != "" && (title == "" || strings.HasSuffix(strings.ToLower(file), strings.ToLower(title))) {
+	// libmpv titles external subtitles by their file name, or the part of
+	// it that differs from the video ("srt", "en.srt"), which is noise;
+	// for a URL it includes the query, which may carry credentials.
+	if file != "" && (title == "" || strings.HasSuffix(strings.ToLower(raw), strings.ToLower(title))) {
 		title = file
 	}
 	if title != "" && !strings.EqualFold(title, lang) && !strings.EqualFold(title, t.Lang) {
@@ -42,11 +45,34 @@ func (t Track) DisplayName() string {
 	return strings.Join(parts, " · ")
 }
 
+// externalName returns the name to show for an external track's file, and
+// the raw last element libmpv derives titles from. For URLs the name is the
+// last element of the path alone, without query or fragment.
+func externalName(name string) (shown, raw string) {
+	if strings.Contains(name, "://") {
+		raw = name[strings.LastIndex(name, "/")+1:]
+		if u, err := url.Parse(name); err == nil {
+			if b := path.Base(u.Path); b != "." && b != "/" {
+				return b, raw
+			}
+			return u.Host, raw
+		}
+		if i := strings.IndexAny(raw, "?#"); i >= 0 {
+			return raw[:i], raw
+		}
+		return raw, raw
+	}
+	b := filepath.Base(name)
+	return b, b
+}
+
 // LanguageName returns the English name of an ISO 639-1 ("ja") or ISO 639-2
 // ("jpn"; both "ger" and "deu") language code as reported in track
 // metadata, ignoring case and region suffixes ("pt-BR" is "Portuguese").
-// Unknown non-empty codes are returned upper-cased; "und" (undetermined) and
-// empty codes return "".
+// It knows about fifty widely used languages; other codes are returned
+// upper-cased ("BN"), which still reads as a language code. Codes that name
+// no single language ("und", "mul", "mis", "zxx") and empty codes return "",
+// so that callers fall back to the track's title.
 func LanguageName(code string) string {
 	c := strings.ToLower(strings.TrimSpace(code))
 	if i := strings.IndexAny(c, "-_"); i > 0 {

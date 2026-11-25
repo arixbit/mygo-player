@@ -21,7 +21,7 @@ func (a *demoApp) controlBar(c *ui.Context, s player.Snapshot, has, shown bool, 
 	}
 	ui.Row(c.Key("hud-wrap")).Absolute().Left(0).Right(0).Bottom(l.margin).PaddingX(l.margin).
 		Justify(ui.Center).PassThrough().Children(func() {
-		hud := ui.Column(c.Key("hud")).Grow(1).MaxWidth(760).Padding(10, 14).Gap(4).Radius(18).
+		hud := ui.Column(c.Key("hud")).Direction(ui.LeftToRight).Grow(1).MaxWidth(760).Padding(10, 14).Gap(4).Radius(18).
 			Background(hudSurface(c)).Border(1, hudHairline).Shadow(0, 10, 36, 0, hudShadow).
 			// A click on a control leaves the keyboard focus where it was,
 			// so Space keeps playing and pausing rather than pressing the
@@ -34,13 +34,22 @@ func (a *demoApp) controlBar(c *ui.Context, s player.Snapshot, has, shown bool, 
 			c.Invalidate()
 		}
 		if !has {
+			a.resetControls()
 			return
 		}
 		hud.Children(func() {
 			a.seekRow(c, s, now)
-			a.buttonRow(c, s, l)
+			a.buttonRow(c, s, l, now)
 		})
 	})
+}
+
+// resetControls forgets the state of controls the frame did not build, as
+// a menu or a slider the window grew too narrow for while in use: their
+// release never comes.
+func (a *demoApp) resetControls() {
+	a.speedOpen, a.audioOpen, a.subOpen, a.moreOpen = false, false, false, false
+	a.scrubbing, a.volDragging = false, false
 }
 
 func (a *demoApp) seekRow(c *ui.Context, s player.Snapshot, now time.Time) {
@@ -68,7 +77,11 @@ func (a *demoApp) seekRow(c *ui.Context, s player.Snapshot, now time.Time) {
 		ui.Text(c, formatClock(shownPos, long)).FontSize(12).FontFeatures("tnum").TextColor(hudMuted).
 			Width(clockW).SingleLine()
 		a.seekBar(c, s, pos, dur, now)
-		ui.Text(c, formatRemaining(shownPos, s.Duration)).FontSize(12).FontFeatures("tnum").TextColor(hudMuted).
+		remaining := ""
+		if seekable(s) {
+			remaining = formatRemaining(shownPos, s.Duration) // unknown for live streams
+		}
+		ui.Text(c, remaining).FontSize(12).FontFeatures("tnum").TextColor(hudMuted).
 			Width(clockW + 6).TextAlign(ui.End).SingleLine()
 	})
 }
@@ -80,26 +93,32 @@ func (a *demoApp) seekBar(c *ui.Context, s player.Snapshot, pos, dur float64, no
 	const pad = 6
 	val := pos
 	seekable := dur > 0
+	if !seekable {
+		a.scrubbing = false
+	}
 	ui.Box(c.Key("seek-wrap")).Grow(1).Height(20).Children(func() {
 		bar := ui.SliderBase(c.Key("seek"), &val, 0, max(dur, 0.001)).Fill().PaddingX(pad).
 			Label("Playback position").Disabled(!seekable)
-		pressed := bar.Pressed()
+		// The slider keeps the press wherever the pointer goes; Pressed
+		// alone ends as the pointer leaves the bar.
+		btn, held := bar.PressedButton()
+		pressed := held && btn == 0
 		if bar.Changed() {
 			a.scrubPos = val
 			if pressed {
 				a.scrubbing = true
 				if now.Sub(a.lastScrubSeek) >= scrubSeekEvery {
 					a.lastScrubSeek = now
-					_ = a.p.Seek(secs(val))
+					a.seek(val)
 				}
 			} else {
-				_ = a.p.Seek(secs(val))
+				a.seek(val) // arrows, Page Up/Down, Home/End
 				a.holdUntil = now.Add(seekHold)
 			}
 		}
 		if a.scrubbing && !pressed {
 			a.scrubbing = false
-			_ = a.p.Seek(secs(a.scrubPos))
+			a.seek(a.scrubPos) // exactly where it was let go
 			a.holdUntil = now.Add(seekHold)
 		}
 
@@ -127,10 +146,17 @@ func (a *demoApp) seekBar(c *ui.Context, s player.Snapshot, pos, dur float64, no
 			x, at = pad+w*f, float64(f)*dur
 		}
 		ui.Text(c.Key("seek-tip"), formatClock(secs(at), dur >= 3600)).Absolute().Left(x).Bottom(24).
-			TranslatePercent(-50, 0).Padding(3, 7).Radius(7).Background(ui.RGBA(20, 20, 24, 0.92)).
+			TranslatePercent(-50, 0).Padding(3, 7).Radius(7).Background(tipSurface(c)).
 			FontSize(12).FontFeatures("tnum").TextColor(hudText).SingleLine().IgnoreInput(true).
 			AccessHidden(true).Transition(tipTransition)
 	})
+}
+
+func tipSurface(c *ui.Context) ui.Color {
+	if c.Preferences().ReduceTransparency {
+		return ui.RGB(20, 20, 24)
+	}
+	return ui.RGBA(20, 20, 24, 0.92)
 }
 
 // drawTrack paints a slider's track, filled up to frac, with a knob that
@@ -148,23 +174,68 @@ func drawTrack(p *ui.Painter, r ui.Rect, pad, th, knob, frac float32, fill ui.Co
 	}
 }
 
-func (a *demoApp) buttonRow(c *ui.Context, s player.Snapshot, l layout) {
-	showSkip := l.fits(400)
-	showSpeed := l.fits(500)
-	showVolume := l.fits(540)
+// barFit decides which controls the bar has room for, giving up the least
+// needed first: the volume slider (the mute button stays), the skip buttons
+// (the arrow keys stay), then the speed button, which moves into the More
+// menu, as does the audio track button last of all.
+type barFit struct{ volume, skip, speed, audio bool }
+
+func fitBar(l layout, audioMenu bool) barFit {
+	b := l.button
+	side := func(f barFit) float32 {
+		left := b
+		if f.volume {
+			left += 2 + 88
+		}
+		right := 3 * b // subtitles, more, full screen
+		if audioMenu && f.audio {
+			right += b
+		}
+		if f.speed {
+			right += b + 16
+		}
+		return max(left, right)
+	}
+	center := func(f barFit) float32 {
+		if f.skip {
+			return 3*b + 6 + 12
+		}
+		return b + 6
+	}
+	for _, f := range []barFit{{true, true, true, true}, {false, true, true, true}, {false, false, true, true}, {false, false, false, true}, {false, false, false, false}} {
+		if 2*side(f)+center(f)+28 <= l.panelW {
+			return f
+		}
+	}
+	return barFit{}
+}
+
+func (a *demoApp) buttonRow(c *ui.Context, s player.Snapshot, l layout, now time.Time) {
 	audio := filterByType(s.Tracks, player.TrackAudio)
 	subs := filterByType(s.Tracks, player.TrackSub)
+	fit := fitBar(l, len(audio) > 1)
+	fit.skip = fit.skip && seekable(s)
+	if !fit.speed {
+		a.speedOpen = false
+	}
+	audioMenu := len(audio) > 1 && fit.audio
+	if !audioMenu {
+		a.audioOpen = false
+	}
+	if !fit.volume {
+		a.volDragging = false
+	}
 
 	ui.Row(c).AlignItems(ui.Center).Children(func() {
 		ui.Row(c).Width(0).Grow(1).AlignItems(ui.Center).Gap(2).Children(func() {
-			a.volumeControls(c, s, l, showVolume)
+			a.volumeControls(c, s, l, fit.volume, now)
 		})
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-			if showSkip {
+			if fit.skip {
 				b := a.iconButton(c, "back", iconBack, "Back 5 Seconds", "Back 5 seconds (←)", l.button, 20).
 					KeyShortcuts(0, ui.KeyLeft)
 				if b.Clicked() {
-					a.skip(-skipStep)
+					a.skip(s, -skipStep)
 				}
 			}
 			icon, label := iconPause, "Pause"
@@ -175,25 +246,34 @@ func (a *demoApp) buttonRow(c *ui.Context, s player.Snapshot, l layout) {
 				icon, label = iconPlay, "Play"
 			}
 			b := a.iconButton(c, "play", icon, label, label+" (Space)", l.button+6, 24).KeyShortcuts(0, ui.KeySpace)
+			if a.focusPlay {
+				a.focusPlay = false
+				b.Focus()
+			}
 			if b.Clicked() {
 				a.togglePlay()
 			}
-			if showSkip {
+			if fit.skip {
 				b := a.iconButton(c, "forward", iconForward, "Forward 5 Seconds", "Forward 5 seconds (→)", l.button, 20).
 					KeyShortcuts(0, ui.KeyRight)
 				if b.Clicked() {
-					a.skip(skipStep)
+					a.skip(s, skipStep)
 				}
 			}
 		})
 		ui.Row(c).Width(0).Grow(1).Justify(ui.End).AlignItems(ui.Center).Children(func() {
-			if showSpeed {
+			if fit.speed {
 				a.speedMenu(c, s, l)
 			}
-			if len(audio) > 1 {
+			if audioMenu {
 				a.audioMenu(c, audio, l)
 			}
 			a.subtitleMenu(c, s, subs, l)
+			var moreAudio []player.Track
+			if len(audio) > 1 && !audioMenu {
+				moreAudio = audio
+			}
+			a.moreMenu(c, s, l, !fit.speed, moreAudio)
 			icon, label := iconEnterFullScreen, "Full Screen"
 			if a.fullScreen() {
 				icon, label = iconExitFullScreen, "Exit Full Screen"
@@ -205,30 +285,27 @@ func (a *demoApp) buttonRow(c *ui.Context, s player.Snapshot, l layout) {
 	})
 }
 
-func (a *demoApp) volumeControls(c *ui.Context, s player.Snapshot, l layout, slider bool) {
+func (a *demoApp) volumeControls(c *ui.Context, s player.Snapshot, l layout, slider bool, now time.Time) {
 	icon, label := iconVolumeHigh, "Mute"
 	switch {
-	case s.Muted || s.Volume <= 0:
+	case a.silent(s, now):
 		icon, label = iconVolumeMuted, "Unmute"
-	case s.Volume < 50:
+	case a.volume(s, now) < 50:
 		icon = iconVolumeLow
 	}
 	if a.iconButton(c, "mute", icon, label, label+" (M)", l.button, 20).KeyShortcuts(0, ui.KeyM).Clicked() {
-		a.toggleMute()
+		a.toggleMute(s, now)
 	}
 	if !slider {
 		return
 	}
 	const pad = 6
-	v := min(max(s.Volume, 0), 100)
-	if a.volDragging {
-		v = a.volDrag
-	}
+	v := a.volume(s, now)
 	bar := ui.SliderBase(c.Key("volume"), &v, 0, 100).Width(88).Height(20).PaddingX(pad).Label("Volume")
-	pressed := bar.Pressed()
+	btn, held := bar.PressedButton()
+	pressed := held && btn == 0
 	if bar.Changed() {
-		a.volDrag = v
-		a.setVolume(s, v)
+		a.setVolume(s, v, now)
 	}
 	a.volDragging = pressed
 	hot := bar.Hovered() || pressed || bar.Focused()
@@ -259,29 +336,55 @@ func (a *demoApp) speedMenu(c *ui.Context, s player.Snapshot, l layout) {
 		ui.Text(c, speedLabel(s.Speed)).FontSize(13).Bold().FontFeatures("tnum").SingleLine().
 			TextColor(b.AnimateColor("fg", color, motionHover)).ContentTransition(numericSwap(a.speedDown))
 	})
-	b.PopoverMenuButton(func(m *ui.Menu) {
-		for _, spd := range speeds {
-			name := speedLabel(spd)
-			if spd == 1 {
-				name = "Normal"
-			}
-			if m.Item(name).ID(fmt.Sprintf("speed-%g", spd)).Checked(absDiff(s.Speed, spd) < 0.001).Chosen() {
-				a.setSpeed(spd)
-			}
+	b.PopoverMenuButton(func(m *ui.Menu) { a.speedItems(m, s) }, a.menuOptions(&a.speedOpen))
+}
+
+func (a *demoApp) speedItems(m *ui.Menu, s player.Snapshot) {
+	for _, spd := range speeds {
+		name := speedLabel(spd)
+		if spd == 1 {
+			name = "Normal"
 		}
-	}, a.menuOptions(&a.speedOpen))
+		if m.Item(name).ID(fmt.Sprintf("speed-%g", spd)).Checked(absDiff(s.Speed, spd) < 0.001).Chosen() {
+			a.setSpeed(spd)
+		}
+	}
+}
+
+// moreMenu holds what has no button of its own: choosing another video,
+// which touch has no shortcut or drop for, and the speed and audio tracks
+// when the bar is too narrow for their buttons.
+func (a *demoApp) moreMenu(c *ui.Context, s player.Snapshot, l layout, speed bool, audio []player.Track) {
+	b := a.iconButton(c, "more", iconMore, "More", "More", l.button, 20)
+	b.PopoverMenuButton(func(m *ui.Menu) {
+		if m.Item("Choose Video…").ID("more-open").Shortcut(ui.Cmd, ui.KeyO).Chosen() {
+			a.chooseVideo()
+		}
+		if speed || len(audio) > 0 {
+			m.Separator()
+		}
+		if speed {
+			m.Submenu("Playback Speed", func(m *ui.Menu) { a.speedItems(m, s) })
+		}
+		if len(audio) > 0 {
+			names := trackNames(audio)
+			m.Submenu("Audio Track", func(m *ui.Menu) { a.audioItems(m, audio, names) })
+		}
+	}, a.menuOptions(&a.moreOpen))
 }
 
 func (a *demoApp) audioMenu(c *ui.Context, audio []player.Track, l layout) {
 	names := trackNames(audio)
 	b := a.iconButton(c, "audio", iconAudioTrack, "Audio Track", "Audio track", l.button, 20)
-	b.PopoverMenuButton(func(m *ui.Menu) {
-		for i, tr := range audio {
-			if m.Item(names[i]).ID(fmt.Sprintf("aid-%d", tr.ID)).Checked(tr.Selected).Chosen() {
-				_ = a.p.SelectAudioTrack(tr.ID)
-			}
+	b.PopoverMenuButton(func(m *ui.Menu) { a.audioItems(m, audio, names) }, a.menuOptions(&a.audioOpen))
+}
+
+func (a *demoApp) audioItems(m *ui.Menu, audio []player.Track, names []string) {
+	for i, tr := range audio {
+		if m.Item(names[i]).ID(fmt.Sprintf("aid-%d", tr.ID)).Checked(tr.Selected).Chosen() {
+			a.selectAudio(tr.ID)
 		}
-	}, a.menuOptions(&a.audioOpen))
+	}
 }
 
 func (a *demoApp) subtitleMenu(c *ui.Context, s player.Snapshot, subs []player.Track, l layout) {
@@ -299,7 +402,7 @@ func (a *demoApp) subtitleMenu(c *ui.Context, s player.Snapshot, subs []player.T
 			}
 			for i, tr := range subs {
 				if m.Item(names[i]).ID(fmt.Sprintf("sid-%d", tr.ID)).Checked(on && tr.Selected).Chosen() {
-					_ = a.p.SelectSubtitleTrack(tr.ID)
+					a.selectSubtitles(tr.ID)
 				}
 			}
 			m.Separator()

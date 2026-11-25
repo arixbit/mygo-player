@@ -85,14 +85,6 @@ func (f *fakePlayer) SetMuted(m bool) error              { f.snap.Muted = m; ret
 func (f *fakePlayer) SetSpeed(r float64) error           { f.snap.Speed = r; return nil }
 func (f *fakePlayer) SetSubtitlePos(p int) error         { f.subPos = p; return nil }
 
-func (f *fakePlayer) ToggleMute() error {
-	if f.snap.Muted && f.snap.Volume <= 0 {
-		f.snap.Volume = 50
-	}
-	f.snap.Muted = !f.snap.Muted
-	return nil
-}
-
 func (f *fakePlayer) selectTrack(kind player.TrackType, id int64) {
 	for i := range f.snap.Tracks {
 		if f.snap.Tracks[i].Type == kind {
@@ -455,6 +447,9 @@ func TestFormatting(t *testing.T) {
 		{speedLabel(1.25), "1.25×"},
 		{mediaName("", "https://x.test/a/ep1.mkv?token=1"), "ep1.mkv"},
 		{mediaName("Title", "/a/b.mkv"), "Title"},
+		{mediaName("movie.mkv?token=SECRET", "https://x.test/movie.mkv?token=SECRET"), "movie.mkv"},
+		{mediaName("Real Title", "https://x.test/movie.mkv?token=SECRET"), "Real Title"},
+		{mediaName("", "/a/what?.mkv"), "what?.mkv"},
 		{friendlyError(errors.New("mpv playback: unrecognized file format (-17)")), "Unrecognized file format."},
 		{friendlyError(errors.New("player: closed")), "Closed."},
 	} {
@@ -479,13 +474,154 @@ func TestClickOnThePicturePlaysAndPauses(t *testing.T) {
 	a.open("/movies/movie.mkv", nil)
 	tt.Frame()
 	tt.ClickAt(480, 200)
+	tt.Advance(clickDelay + 50*time.Millisecond)
 	if !f.snap.Paused {
 		t.Fatal("a click on the picture should pause")
 	}
 	tt.Advance(time.Second) // past the double-click interval
 	tt.ClickAt(480, 200)
+	tt.Advance(clickDelay + 50*time.Millisecond)
 	if f.snap.Paused {
 		t.Fatal("another click should play")
+	}
+
+	// A double click (full screen) leaves playback alone, also at the end.
+	tt.Advance(time.Second)
+	tt.ClickAtWith(0, 480, 200)
+	tt.ClickAtWith(0, 480, 200)
+	tt.Advance(time.Second)
+	if f.snap.Paused {
+		t.Fatal("a double click paused playback")
+	}
+	f.snap.EOF, f.snap.State, f.snap.Position = true, player.StateEnded, 90*time.Second
+	tt.Frame()
+	tt.Advance(time.Second)
+	tt.ClickAt(480, 200)
+	tt.ClickAt(480, 200)
+	tt.Advance(time.Second)
+	if !f.snap.EOF || f.snap.Position != 90*time.Second {
+		t.Fatal("a double click at the end replayed the video")
+	}
+}
+
+func TestDraggingOffTheSeekBarStaysThrottled(t *testing.T) {
+	a, f, tt := newTestApp(t, 960, 600)
+	a.open("/movies/movie.mkv", nil)
+	tt.Frame()
+	info, _ := tt.Access("Playback position")
+	b := info.Bounds
+	y := b.Y + b.H/2
+	tt.Press(b.X+10, y)
+	for i := 1; i <= 10; i++ {
+		tt.Move(b.X+10+float32(i)*30, y-40) // well above the bar
+		tt.Advance(16 * time.Millisecond)
+	}
+	if !a.scrubbing {
+		t.Error("leaving the bar while dragging ended the scrub")
+	}
+	tt.Release(b.X+310, y-40)
+	tt.Frame()
+	if len(f.seeks) > 6 {
+		t.Errorf("%d seeks for a 10-move drag off the bar; want throttled", len(f.seeks))
+	}
+	if a.scrubbing {
+		t.Error("scrub did not end on release")
+	}
+}
+
+func TestTabRevealsHiddenControls(t *testing.T) {
+	a, _, tt := newTestApp(t, 960, 600)
+	a.open("/movies/movie.mkv", nil)
+	tt.Frame()
+	tt.Advance(hideChromeAfter + time.Second)
+	if visible(tt, "Pause") {
+		t.Fatal("controls should be hidden")
+	}
+	tt.Key(0, ui.KeyTab)
+	tt.Frame()
+	if !visible(tt, "Pause") || !tt.Focused("Pause") {
+		t.Fatalf("Tab should bring the controls back with the focus in them (focused Pause: %v)", tt.Focused("Pause"))
+	}
+	tt.Advance(hideChromeAfter + time.Second)
+	if !visible(tt, "Pause") {
+		t.Error("controls should stay while the keyboard is in them")
+	}
+}
+
+func TestSilentVolumeUnmutes(t *testing.T) {
+	a, f, tt := newTestApp(t, 960, 600)
+	a.open("/movies/movie.mkv", nil)
+	f.snap.Volume = 0 // dragged to zero: silent but not muted
+	tt.Frame()
+	if err := tt.Click("Unmute"); err != nil {
+		t.Fatal(err)
+	}
+	if f.snap.Muted || f.snap.Volume <= 0 {
+		t.Errorf("“Unmute” left it silent: muted %v volume %v", f.snap.Muted, f.snap.Volume)
+	}
+}
+
+func TestMenuClosedByResizeDoesNotStickShortcuts(t *testing.T) {
+	a, f, tt := newTestApp(t, 960, 600)
+	a.open("/movies/movie.mkv", nil)
+	tt.Frame()
+	if err := tt.Click("Playback Speed"); err != nil {
+		t.Fatal(err)
+	}
+	if !a.speedOpen {
+		t.Fatal("speed menu did not open")
+	}
+	tt.SetSize(320, 600)
+	tt.Frame()
+	tt.Frame()
+	if a.anyMenuOpen() {
+		t.Fatal("a menu whose button went away still counts as open")
+	}
+	tt.Key(0, ui.KeyK)
+	if !f.snap.Paused {
+		t.Error("K should pause once the menu is gone")
+	}
+}
+
+func TestUnrelatedDropKeepsPlayback(t *testing.T) {
+	a, f, tt := newTestApp(t, 960, 600)
+	a.open("/movies/movie.mkv", nil)
+	tt.Frame()
+	tt.DropFiles(480, 300, "/docs/readme.txt")
+	tt.Frame()
+	if len(f.opened) != 1 || !tt.HasText("Can’t open “readme.txt”") {
+		t.Errorf("a text file replaced the movie or went unexplained: opened %v", f.opened)
+	}
+	tt.DropFiles(480, 300, "/docs/readme.txt", "/movies/next.mkv")
+	if f.opened[len(f.opened)-1] != "/movies/next.mkv" {
+		t.Errorf("mixed drop opened %q, want the video", f.opened[len(f.opened)-1])
+	}
+}
+
+func TestAudioOnlyKeepsControls(t *testing.T) {
+	a, f, tt := newTestApp(t, 960, 600)
+	a.open("/music/song.flac", nil)
+	f.snap.VideoWidth, f.snap.MediaTitle = 0, "A Song"
+	f.snap.Tracks = filterByType(f.snap.Tracks, player.TrackAudio)
+	tt.Frame()
+	tt.Advance(hideChromeAfter + time.Second)
+	if !visible(tt, "Pause") || !tt.HasText("A Song") {
+		t.Errorf("audio-only playback should keep its controls and title: %q", tt.Texts())
+	}
+}
+
+func TestLiveStreamHasNoSeeking(t *testing.T) {
+	a, f, tt := newTestApp(t, 960, 600)
+	a.open("https://live.test/stream.m3u8", nil)
+	f.snap.Duration = 0
+	tt.Frame()
+	if visible(tt, "Back 5 Seconds") || tt.HasText("-0:00") {
+		t.Errorf("live stream shows seeking it can't do: %q", tt.Texts())
+	}
+	pos := f.snap.Position
+	tt.Key(0, ui.KeyRight)
+	if f.snap.Position != pos {
+		t.Error("Right skipped in a live stream")
 	}
 }
 

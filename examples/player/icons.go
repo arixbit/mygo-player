@@ -31,5 +31,7 @@ var (
 
 	iconFilm  = svgIcon(`<rect x="3" y="4" width="18" height="16" rx="3" stroke-width="1.5"/><path stroke-width="1.5" d="M7.5 4v16M16.5 4v16M3 9h4.5M3 15h4.5M16.5 9H21M16.5 15H21"/>`)
 	iconAlert = svgIcon(`<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5v.01"/>`)
+	iconMusic = svgIcon(`<path d="M9 18V5.5l11-2V16"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>`)
+	iconMore  = svgIcon(`<circle fill="currentColor" stroke="none" cx="5.5" cy="12" r="1.8"/><circle fill="currentColor" stroke="none" cx="12" cy="12" r="1.8"/><circle fill="currentColor" stroke="none" cx="18.5" cy="12" r="1.8"/>`)
 	iconDrop  = svgIcon(`<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>`)
 )

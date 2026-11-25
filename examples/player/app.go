@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -23,7 +24,12 @@ const (
 	scrubSeekEvery = 60 * time.Millisecond
 	// seekHold keeps the seek bar where the user put it until playback
 	// reports the new position, so the thumb never jumps back.
-	seekHold   = 1500 * time.Millisecond
+	seekHold = 1500 * time.Millisecond
+	// volumeHold does the same for the volume.
+	volumeHold = 800 * time.Millisecond
+	// clickDelay is how long a click on the picture waits to tell itself
+	// apart from the first half of a double click.
+	clickDelay = 220 * time.Millisecond
 	volumeStep = 5
 	skipStep   = 5 * time.Second
 )
@@ -38,7 +44,6 @@ type mediaPlayer interface {
 	SeekRelative(delta time.Duration) error
 	SetVolume(v float64) error
 	SetMuted(muted bool) error
-	ToggleMute() error
 	SetSpeed(rate float64) error
 	SelectAudioTrack(id int64) error
 	SelectSubtitleTrack(id int64) error
@@ -48,11 +53,13 @@ type mediaPlayer interface {
 }
 
 // demoApp is the window's state. Every field is read and written on the UI
-// thread: goroutines (file dialogs) hand their results over with post.
+// thread: goroutines (file dialogs, the command queue) hand their results
+// over with post.
 type demoApp struct {
 	win    *mygo.Window
 	p      mediaPlayer
 	canvas func(c *ui.Context) ui.Element
+	cmds   *commandQueue // nil runs commands at once (tests)
 
 	target string // what is open (path or URL), "" when nothing is
 
@@ -60,30 +67,33 @@ type demoApp struct {
 	lastTouch    bool      // the last pointer input came from a finger
 	chromeShown  bool      // whether the last frame showed the controls
 	hudHot       bool      // pointer or keyboard focus in the control bar
+	focusPlay    bool      // give the play button the focus next frame (Tab)
 
-	speedOpen, audioOpen, subOpen bool // menus open
+	speedOpen, audioOpen, subOpen, moreOpen bool // menus open
 
 	scrubbing     bool
 	scrubPos      float64 // seconds, while dragging or until playback catches up
 	lastScrubSeek time.Time
 	holdUntil     time.Time // show scrubPos instead of the reported position until then
 
-	volDragging bool
-	volDrag     float64
+	volDragging  bool
+	volTarget    float64   // volume last set, until playback reports it
+	volHoldUntil time.Time // show volTarget until then
+
+	pendingClick time.Time // a click on the picture waiting for a second one
+	clickActed   time.Time // when a click on the picture last toggled playback
+	skipClick    bool      // drop the click that ends a double click
 
 	lastSubID int64 // subtitle track to bring back when subtitles are turned on
 	lastSpeed float64
 	speedDown bool // the speed last went down (its label rolls down)
 	subPosSet int  // sub-pos last applied, 0 before any
-	// subPos hands sub-pos changes to a goroutine: libmpv can hold a
-	// property write for a long while (as when a file is loading), which
-	// must not stall the frame. Nil applies them at once (tests).
-	subPos chan int
 
 	dark      *ui.Theme // theme of the controls over the picture
 	darkPrefs ui.Preferences
 
 	shownTitle string // window title last set
+	shownFile  string // represented file last set
 	pending    []ui.Toast
 }
 
@@ -91,27 +101,79 @@ func newDemoApp(p mediaPlayer, canvas func(c *ui.Context) ui.Element) *demoApp {
 	return &demoApp{p: p, canvas: canvas, lastSpeed: 1}
 }
 
-// startSubPosWorker applies sub-pos changes off the UI thread, the latest
-// one winning.
-func (a *demoApp) startSubPosWorker() {
-	a.subPos = make(chan int, 1)
-	go func() {
-		for v := range a.subPos {
-			_ = a.p.SetSubtitlePos(v)
-		}
-	}()
+// commandQueue runs player commands one after another on a goroutine of
+// its own: libmpv can hold a command for a long while (loading a file,
+// attaching subtitles, a write while a file loads), which must never stall
+// a frame. A command with a key replaces one with the same key that has not
+// run yet, so a dragged slider sends only its latest value.
+type commandQueue struct {
+	mu    sync.Mutex
+	items []command
+	wake  chan struct{}
 }
 
-func (a *demoApp) applySubPos(v int) {
-	if a.subPos == nil {
-		_ = a.p.SetSubtitlePos(v)
-		return
+type command struct {
+	key string
+	fn  func()
+}
+
+func newCommandQueue() *commandQueue {
+	q := &commandQueue{wake: make(chan struct{}, 1)}
+	go q.loop()
+	return q
+}
+
+func (q *commandQueue) push(key string, fn func()) {
+	q.mu.Lock()
+	replaced := false
+	if key != "" {
+		for i := range q.items {
+			if q.items[i].key == key {
+				q.items[i].fn, replaced = fn, true
+				break
+			}
+		}
 	}
+	if !replaced {
+		q.items = append(q.items, command{key, fn})
+	}
+	q.mu.Unlock()
 	select {
-	case <-a.subPos: // drop a value not applied yet
+	case q.wake <- struct{}{}:
 	default:
 	}
-	a.subPos <- v
+}
+
+func (q *commandQueue) loop() {
+	for range q.wake {
+		for {
+			q.mu.Lock()
+			if len(q.items) == 0 {
+				q.mu.Unlock()
+				break
+			}
+			c := q.items[0]
+			q.items = q.items[1:]
+			q.mu.Unlock()
+			c.fn()
+		}
+	}
+}
+
+// run sends a player command; onErr, unless nil, gets its error on the UI
+// thread.
+func (a *demoApp) run(key string, fn func() error, onErr func(error)) {
+	if a.cmds == nil {
+		if err := fn(); err != nil && onErr != nil {
+			onErr(err)
+		}
+		return
+	}
+	a.cmds.push(key, func() {
+		if err := fn(); err != nil && onErr != nil {
+			a.post(func() { onErr(err) })
+		}
+	})
 }
 
 // post runs fn on the UI thread and redraws, from any goroutine.
@@ -150,27 +212,41 @@ func (a *demoApp) poke(now time.Time) {
 // open plays target, with subtitle files to attach. UI thread only.
 func (a *demoApp) open(target string, subs []string) {
 	a.target = target
-	a.scrubbing, a.holdUntil = false, time.Time{}
+	a.scrubbing, a.holdUntil, a.volHoldUntil = false, time.Time{}, time.Time{}
 	a.lastSubID = 0
 	a.lastActivity = time.Now()
-	if err := a.p.Open(target, player.OpenOptions{Subtitles: subs}); err != nil {
-		a.fail(fmt.Sprintf("Couldn’t open “%s”", mediaName("", target)), err)
-		return
-	}
+	name := mediaName("", target)
+	a.run("", func() error {
+		return a.p.Open(target, player.OpenOptions{Subtitles: subs})
+	}, func(err error) {
+		a.fail(fmt.Sprintf("Couldn’t open “%s”", name), err)
+	})
 	if isLocalFile(target) && a.win != nil {
 		_ = mygo.App.AddRecentDocument(target)
 	}
 }
 
-// openPaths opens what was dropped on the window or opened from the
-// desktop: the first video replaces what plays, with any subtitle files
-// dropped along with it; subtitle files alone are added to what plays.
-func (a *demoApp) openPaths(paths []string) {
-	video, subs := splitDropped(paths)
+// openPaths opens what was dropped on the window, chosen in a dialog or
+// opened from the desktop. The first video replaces what plays, with any
+// subtitle files that came along; subtitle files alone are added to what
+// plays. A file that is neither replaces nothing that plays, unless the
+// user picked it on purpose (trusted: a dialog, "Open With").
+func (a *demoApp) openPaths(paths []string, trusted bool) {
+	video, other, subs := splitDropped(paths)
+	has := a.hasMedia(a.p.Snapshot())
 	switch {
 	case video != "":
 		a.open(video, subs)
-	case len(subs) > 0 && a.hasMedia(a.p.Snapshot()):
+		return
+	case other != "" && (trusted || !has):
+		a.open(other, subs)
+		return
+	case other != "":
+		a.notify(ui.Toast{ID: "not-video", Title: fmt.Sprintf("Can’t open “%s”", filepath.Base(other)),
+			Description: "Drop a video to play it, or subtitle files to add them."})
+	}
+	switch {
+	case len(subs) > 0 && has:
 		for _, s := range subs {
 			a.addSubtitle(s)
 		}
@@ -180,12 +256,15 @@ func (a *demoApp) openPaths(paths []string) {
 }
 
 func (a *demoApp) addSubtitle(path string) {
-	if err := a.p.AddSubtitleFile(path, player.SubtitleSelect); err != nil {
-		a.fail(fmt.Sprintf("Couldn’t add “%s”", filepath.Base(path)), err)
-	}
+	name := filepath.Base(path)
+	a.run("", func() error {
+		return a.p.AddSubtitleFile(path, player.SubtitleSelect)
+	}, func(err error) {
+		a.fail(fmt.Sprintf("Couldn’t add “%s”", name), err)
+	})
 }
 
-var videoFilter = mygo.FileFilter{Name: "Videos", Extensions: []string{"mkv", "mp4", "m4v", "mov", "webm", "avi", "ts", "m2ts", "mts", "flv", "wmv", "mpg", "mpeg", "ogv", "3gp"}}
+var videoFilter = mygo.FileFilter{Name: "Videos", Extensions: videoExtensions}
 
 func (a *demoApp) chooseVideo() {
 	go func() {
@@ -197,7 +276,7 @@ func (a *demoApp) chooseVideo() {
 		if err != nil || len(paths) == 0 {
 			return // canceled
 		}
-		a.post(func() { a.openPaths(paths[:1]) })
+		a.post(func() { a.openPaths(paths[:1], true) })
 	}()
 }
 
@@ -225,32 +304,71 @@ func (a *demoApp) hasMedia(s player.Snapshot) bool {
 	return a.target != ""
 }
 
-func (a *demoApp) togglePlay() { _ = a.p.TogglePause() }
+// seekable reports whether the media has a known length to seek in (live
+// streams have none).
+func seekable(s player.Snapshot) bool { return s.Duration > 0 }
 
-func (a *demoApp) skip(d time.Duration) {
+func (a *demoApp) togglePlay() {
+	a.run("", a.p.TogglePause, nil)
+}
+
+func (a *demoApp) skip(s player.Snapshot, d time.Duration) {
+	if !seekable(s) {
+		return
+	}
 	a.holdUntil = time.Time{}
-	_ = a.p.SeekRelative(d)
+	a.run("", func() error { return a.p.SeekRelative(d) }, nil)
 }
 
-// changeVolume nudges the volume; turning it up unmutes.
-func (a *demoApp) changeVolume(s player.Snapshot, delta float64) {
-	v := min(max(s.Volume+delta, 0), 100)
-	_ = a.p.SetVolume(v)
-	if s.Muted && delta > 0 {
-		_ = a.p.SetMuted(false)
+func (a *demoApp) seek(pos float64) {
+	a.run("seek", func() error { return a.p.Seek(secs(pos)) }, nil)
+}
+
+// volume is the volume to show: the one last set until playback reports
+// it, so quick changes build on each other rather than on a stale value.
+func (a *demoApp) volume(s player.Snapshot, now time.Time) float64 {
+	if a.volDragging || now.Before(a.volHoldUntil) {
+		return a.volTarget
 	}
+	return min(max(s.Volume, 0), 100)
 }
 
-// setVolume sets the volume from the slider: dragging up from silence
-// unmutes, dragging to zero is the same as muting.
-func (a *demoApp) setVolume(s player.Snapshot, v float64) {
-	_ = a.p.SetVolume(v)
-	if s.Muted && v > 0 {
-		_ = a.p.SetMuted(false)
+// setVolume sets the volume: raising it from silence unmutes.
+func (a *demoApp) setVolume(s player.Snapshot, v float64, now time.Time) {
+	v = min(max(v, 0), 100)
+	a.volTarget, a.volHoldUntil = v, now.Add(volumeHold)
+	unmute := s.Muted && v > 0
+	a.run("volume", func() error {
+		if err := a.p.SetVolume(v); err != nil {
+			return err
+		}
+		if unmute {
+			return a.p.SetMuted(false)
+		}
+		return nil
+	}, nil)
+}
+
+func (a *demoApp) changeVolume(s player.Snapshot, delta float64, now time.Time) {
+	a.setVolume(s, a.volume(s, now)+delta, now)
+}
+
+// silent reports whether nothing is heard: muted, or at volume 0. The mute
+// button then offers to unmute, and does.
+func (a *demoApp) silent(s player.Snapshot, now time.Time) bool {
+	return s.Muted || a.volume(s, now) <= 0
+}
+
+func (a *demoApp) toggleMute(s player.Snapshot, now time.Time) {
+	if !a.silent(s, now) {
+		a.run("", func() error { return a.p.SetMuted(true) }, nil)
+		return
 	}
+	if a.volume(s, now) <= 0 {
+		a.setVolume(s, 50, now) // unmuting is never silent
+	}
+	a.run("", func() error { return a.p.SetMuted(false) }, nil)
 }
-
-func (a *demoApp) toggleMute() { _ = a.p.ToggleMute() }
 
 // subtitlesOn reports whether a subtitle track shows.
 func subtitlesOn(s player.Snapshot) bool { return s.SubTrackID != 0 && s.SubVisible }
@@ -260,7 +378,7 @@ func subtitlesOn(s player.Snapshot) bool { return s.SubTrackID != 0 && s.SubVisi
 func (a *demoApp) toggleSubtitles(s player.Snapshot) {
 	if subtitlesOn(s) {
 		a.lastSubID = s.SubTrackID
-		_ = a.p.DisableSubtitleTrack()
+		a.run("subtitles", a.p.DisableSubtitleTrack, nil)
 		return
 	}
 	subs := filterByType(s.Tracks, player.TrackSub)
@@ -273,10 +391,24 @@ func (a *demoApp) toggleSubtitles(s player.Snapshot) {
 			id = tr.ID
 		}
 	}
-	_ = a.p.SelectSubtitleTrack(id)
+	a.selectSubtitles(id)
 }
 
-func (a *demoApp) setSpeed(rate float64) { _ = a.p.SetSpeed(rate) }
+func (a *demoApp) selectSubtitles(id int64) {
+	a.run("subtitles", func() error { return a.p.SelectSubtitleTrack(id) }, nil)
+}
+
+func (a *demoApp) selectAudio(id int64) {
+	a.run("audio", func() error { return a.p.SelectAudioTrack(id) }, nil)
+}
+
+func (a *demoApp) setSpeed(rate float64) {
+	a.run("speed", func() error { return a.p.SetSpeed(rate) }, nil)
+}
+
+func (a *demoApp) applySubPos(v int) {
+	a.run("sub-pos", func() error { return a.p.SetSubtitlePos(v) }, nil)
+}
 
 func (a *demoApp) fullScreen() bool { return a.win != nil && a.win.IsFullScreen() }
 
@@ -286,25 +418,28 @@ func (a *demoApp) toggleFullScreen() {
 	}
 }
 
-func (a *demoApp) anyMenuOpen() bool { return a.speedOpen || a.audioOpen || a.subOpen }
+func (a *demoApp) anyMenuOpen() bool { return a.speedOpen || a.audioOpen || a.subOpen || a.moreOpen }
 
 // syncWindow names the window after what plays, and tells the system which
 // file it shows (the macOS title bar's proxy icon).
 func (a *demoApp) syncWindow(s player.Snapshot) {
-	title := appTitle
+	title, file := appTitle, ""
 	if a.target != "" {
 		title = mediaName(s.MediaTitle, a.target)
 	}
-	if title == a.shownTitle || a.win == nil {
-		a.shownTitle = title
+	if isLocalFile(a.target) {
+		file = a.target
+	}
+	if a.win == nil {
 		return
 	}
-	a.shownTitle = title
-	a.win.SetTitle(title)
-	if isLocalFile(a.target) {
-		a.win.SetRepresentedFile(a.target)
-	} else {
-		a.win.SetRepresentedFile("")
+	if title != a.shownTitle {
+		a.shownTitle = title
+		a.win.SetTitle(title)
+	}
+	if file != a.shownFile {
+		a.shownFile = file
+		a.win.SetRepresentedFile(file)
 	}
 }
 

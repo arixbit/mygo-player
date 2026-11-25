@@ -304,6 +304,18 @@ func TestToggleMute(t *testing.T) {
 		s := p.Snapshot()
 		return !s.Muted && s.Volume == 50
 	})
+	// Calls in quick succession each flip it, whatever Snapshot says yet.
+	for i := 0; i < 10; i++ {
+		if err := p.ToggleMute(); err != nil {
+			t.Fatal(err)
+		}
+		if err := p.ToggleMute(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if m, _ := p.GetPropertyString("mute"); m != "no" {
+		t.Fatalf("mute after ten quick toggle pairs = %q, want no", m)
+	}
 	if err := p.Close(); err != nil {
 		t.Fatal(err)
 	}

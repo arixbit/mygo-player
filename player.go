@@ -566,20 +566,28 @@ func (p *Player) SetMuted(muted bool) error {
 	return p.client.SetPropertyFlag("mute", muted)
 }
 
-// ToggleMute mutes or unmutes audio output based on the current state. When
-// unmuting a player whose volume is 0, it also restores an audible volume
-// (50), so that unmuting is never silent.
+// ToggleMute mutes or unmutes audio output based on libmpv's current state
+// (not the asynchronously updated Snapshot), so calls made in quick
+// succession each flip it. When unmuting a player whose volume is 0, it also
+// restores an audible volume (50), so that unmuting is never silent.
 func (p *Player) ToggleMute() error {
-	s := p.Snapshot()
-	if s.Muted {
-		if s.Volume <= 0 {
-			if err := p.SetVolume(50); err != nil {
+	p.cmdMu.Lock()
+	defer p.cmdMu.Unlock()
+	if p.closed.Load() {
+		return ErrClosed
+	}
+	muted, err := p.client.GetPropertyFlag("mute")
+	if err != nil {
+		return err
+	}
+	if muted {
+		if vol, err := p.client.GetPropertyFloat64("volume"); err == nil && vol <= 0 {
+			if err := p.client.SetPropertyFloat64("volume", 50); err != nil {
 				return err
 			}
 		}
-		return p.SetMuted(false)
 	}
-	return p.SetMuted(true)
+	return p.client.SetPropertyFlag("mute", !muted)
 }
 
 // SetSpeed sets the playback rate multiplier (e.g. 0.5, 1.0, 1.5, 2.0).
