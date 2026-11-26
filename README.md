@@ -2,6 +2,8 @@ English | [中文文档](README_ZH.md)
 
 # mygo-player
 
+[![Listed on Awesome MyGo](https://awesomemygo.dev/badge.svg)](https://awesomemygo.dev/plugins)
+
 Standalone native UI video player plugin for [MyGo](https://github.com/egoist/mygo) (`v0.10.0`), powered by **libmpv** (LGPL 2.1+) with **zero cgo** (`CGO_ENABLED=0`).
 
 `mygo-player` follows the same plugin layout as official MyGo native plugins (`mygo-plugin.json`, `mygo/ffi`, `Load`, `LibraryPath`, `New`, `View`). Frames render directly inside MyGo's native UI scene graph—never as a separate native child window—so HUD controls, danmaku, rounded corners, and popovers always composite cleanly above the video.

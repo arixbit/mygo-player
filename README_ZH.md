@@ -2,6 +2,8 @@
 
 # mygo-player
 
+[![Listed on Awesome MyGo](https://awesomemygo.dev/badge.svg)](https://awesomemygo.dev/plugins)
+
 面向 [MyGo](https://github.com/egoist/mygo)（`v0.10.0`）的独立原生 UI 视频播放器插件，底层基于 **libmpv**（LGPL 2.1+），**纯 Go 零 cgo**（`CGO_ENABLED=0`）。
 
 `mygo-player` 采用与 MyGo 官方原生插件一致的架构（内置 `mygo-plugin.json`、通过 `mygo/ffi` 动态加载，提供 `Load`、`LibraryPath`、`New`、`View` 等简洁接口）。视频画面直接绘制在 MyGo 的原生 UI 图层中，而不是覆盖在最顶层的系统子窗口，因此播放控制栏、弹幕、圆角裁切、弹出菜单等 UI 元素始终都能自然叠在视频上方，不会出现遮挡。
